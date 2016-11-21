@@ -18,6 +18,19 @@ WAYPOINT_RADIUS = 100.0
 LOW_HP_FACTOR = 0.25
 
 
+def intersection_point(p, v, w):
+    l2 = (v.x-w.x)**2 + (v.y-w.y)**2
+    if l2 == 0:
+        return v
+    t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2
+    t = max(0, min(1, t))
+    return Point2D(v.x + t * (w.x - v.x), v.y + t * (w.y - v.y))
+
+
+def distance_to_segment(p, v, w):
+    return p.get_distance_to_unit(intersection_point(p, v, w))
+
+
 class Point2D:
     def __init__(self, x, y):
         self.x = x
@@ -28,16 +41,6 @@ class Point2D:
 
     def get_distance_to_unit(self, unit):
         return self.get_distance_to(unit.x, unit.y)
-
-
-def distance_to_segment(p, v, w):
-    l2 = (v.x-w.x)**2 + (v.y-w.y)**2
-    if l2 == 0:
-        return p.get_distance_to_unit(w)
-    t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2
-    t = max(0, min(1, t))
-    intersection_pt = Point2D(v.x + t * (w.x - v.x), v.y + t * (w.y - v.y))
-    return p.get_distance_to_unit(intersection_pt)
 
 
 class MyStrategy:
@@ -85,7 +88,7 @@ class MyStrategy:
             segment_distance = distance_to_segment(unit, wp[i], wp[i+1])
             if (min_segment_distance is None) or (min_segment_distance > segment_distance):
                 min_segment_distance = segment_distance
-                unit_distance_on_lane = path_length + segment_distance
+                unit_distance_on_lane = path_length + wp[i].get_distance_to_unit(intersection_point(unit, wp[i], wp[i+1]))
             path_length += wp[i].get_distance_to_unit(wp[i+1])
         return unit_distance_on_lane
 
@@ -114,11 +117,13 @@ class MyStrategy:
     def get_vanguard(self) -> LivingUnit:
         vanguard = None
         vanguard_distance = None
+        print("get_vanguard")
         for ally in self.allies():
             lane, distance = self.get_position(ally)
             if lane not in [None, self.lane]:
                 continue
-            if (vanguard_distance is None) or (distance < vanguard_distance):
+            print("  ", lane, distance)
+            if (vanguard_distance is None) or (distance > vanguard_distance):
                 vanguard = ally
                 vanguard_distance = distance
         return vanguard
@@ -134,7 +139,7 @@ class MyStrategy:
 
     def allies(self):
         units = self.world.buildings + self.world.wizards + self.world.minions
-        return [unit for unit in units if unit.faction in [Faction.NEUTRAL, self.me.faction]]
+        return [unit for unit in units if (unit.faction == self.me.faction) and (unit.id != self.me.id)]
 
     def get_free_attack_distance(self):
         return min([self.get_unit_free_attack_distance(unit) for unit in self.enemy_units()])
@@ -248,12 +253,11 @@ class MyStrategy:
             return
 
         vanguard = self.get_vanguard()
-        if False:  # vanguard is not None:
-            print(vanguard)
-            vanguard_distance = self.get_unit_distance_to_lane(self.lane, vanguard)
-            my_distance = self.get_unit_distance_to_lane(self.lane, self.me)
-            if my_distance + 100 < vanguard_distance:
-                print("Retreat")
+        if vanguard is not None:
+            vanguard_distance = self.get_unit_distance_on_lane(self.lane, vanguard)
+            my_distance = self.get_unit_distance_on_lane(self.lane, self.me)
+            if my_distance + 100 > vanguard_distance:
+                print("Retreat. Vanguard is %s on %f (%f %f). Me is %f (%f %f)" % (type(vanguard), vanguard_distance, vanguard.x, vanguard.y, my_distance, self.me.x, self.me.y))
                 self.retreat()
                 return
 
