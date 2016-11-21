@@ -7,6 +7,7 @@ from model.LaneType import LaneType
 from model.Faction import Faction
 from model.LivingUnit import LivingUnit
 from model.Building import Building
+from model.BuildingType import BuildingType
 from model.Minion import Minion
 from model.MinionType import MinionType
 
@@ -29,6 +30,16 @@ class Point2D:
         return self.get_distance_to(unit.x, unit.y)
 
 
+def distance_to_segment(p, v, w):
+    l2 = (v.x-w.x)**2 + (v.y-w.y)**2
+    if l2 == 0:
+        return p.get_distance_to_unit(w)
+    t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2
+    t = max(0, min(1, t))
+    intersection_pt = Point2D(v.x + t * (w.x - v.x), v.y + t * (w.y - v.y))
+    return p.get_distance_to_unit(intersection_pt)
+
+
 class MyStrategy:
 
     def __init__(self):
@@ -44,8 +55,8 @@ class MyStrategy:
 
     def setup_strafe(self):
         if self.strafe_line == 0:
-            self.strafe_line = random.randint(1,6)
-            self.strafe_dir  = -self.strafe_dir
+            self.strafe_line = random.randint(1, 20)
+            self.strafe_dir = -self.strafe_dir
         self.current_move.strafe_speed = self.strafe_dir * random.uniform(0, self.game.wizard_strafe_speed)
         self.strafe_line -= 1
 
@@ -56,17 +67,61 @@ class MyStrategy:
         self.current_move = move
 
     def get_nearest_target(self) -> LivingUnit:
-        targets = self.world.buildings + self.world.wizards + self.world.minions
         nearest_target = None
         nearest_target_distance = None
-        for target in targets:
-            if target.faction in [Faction.NEUTRAL, self.me.faction]:
-                continue
+        for target in self.enemy_units():
             distance = self.me.get_distance_to_unit(target)
             if (nearest_target_distance is None) or (distance < nearest_target_distance):
                 nearest_target = target
-            nearest_target_distance = distance
+                nearest_target_distance = distance
         return nearest_target
+
+    def get_unit_distance_on_lane(self, lane: LaneType, unit):
+        wp = self.waypoints_by_lane[lane]
+        min_segment_distance = None
+        unit_distance_on_lane = None
+        path_length = 0
+        for i in range(len(wp) - 1):
+            segment_distance = distance_to_segment(unit, wp[i], wp[i+1])
+            if (min_segment_distance is None) or (min_segment_distance > segment_distance):
+                min_segment_distance = segment_distance
+                unit_distance_on_lane = path_length + segment_distance
+            path_length += wp[i].get_distance_to_unit(wp[i+1])
+        return unit_distance_on_lane
+
+    def get_unit_distance_to_lane(self, lane: LaneType, unit):
+        wp = self.waypoints_by_lane[lane]
+        return min(distance_to_segment(unit, wp[i], wp[i+1]) for i in range(len(wp) - 1))
+
+    def get_unit_lane(self, unit):
+        if (unit is Building) and (unit.type == BuildingType.FACTION_BASE):
+            return None
+        closest_lane = None
+        distance_to_closest_lane = None
+        for lane in [LaneType.TOP, LaneType.MIDDLE, LaneType.BOTTOM]:
+            distance_to_lane = self.get_unit_distance_to_lane(lane, unit)
+            if (closest_lane is None) or (distance_to_closest_lane > distance_to_lane):
+                closest_lane = lane
+                distance_to_closest_lane = distance_to_lane
+        return closest_lane
+
+    def get_position(self, unit):
+        lane = self.get_unit_lane(unit)
+        if lane is None:
+            return lane, 0
+        return lane, self.get_unit_distance_on_lane(lane, unit)
+
+    def get_vanguard(self) -> LivingUnit:
+        vanguard = None
+        vanguard_distance = None
+        for ally in self.allies():
+            lane, distance = self.get_position(ally)
+            if lane not in [None, self.lane]:
+                continue
+            if (vanguard_distance is None) or (distance < vanguard_distance):
+                vanguard = ally
+                vanguard_distance = distance
+        return vanguard
 
     def get_unit_free_attack_distance(self, unit):
         distance = self.me.get_distance_to_unit(unit)
@@ -76,6 +131,10 @@ class MyStrategy:
     def enemy_units(self):
         targets = self.world.buildings + self.world.wizards + self.world.minions
         return [unit for unit in targets if unit.faction not in [Faction.NEUTRAL, self.me.faction]]
+
+    def allies(self):
+        units = self.world.buildings + self.world.wizards + self.world.minions
+        return [unit for unit in units if unit.faction in [Faction.NEUTRAL, self.me.faction]]
 
     def get_free_attack_distance(self):
         return min([self.get_unit_free_attack_distance(unit) for unit in self.enemy_units()])
@@ -165,14 +224,17 @@ class MyStrategy:
         else:
             return 0
 
-    def go_to_unit(self, unit, force=False):
+    def go_to_unit(self, unit):
         self.go_to(unit.x, unit.y)
 
-    def go_to(self, x, y, force=False):
+    def go_to(self, x, y):
         angle = self.me.get_angle_to(x, y)
         self.current_move.turn = angle
-        if force or (abs(angle) < self.game.staff_sector / 4.0):
+        if abs(angle) < self.game.staff_sector / 4.0:
             self.current_move.speed = self.game.wizard_forward_speed
+
+    def retreat(self):
+        self.current_move.speed = -self.game.wizard_backward_speed
 
     def move(self, me: Wizard, world: World, game: Game, move: Move):
         self.initialize_strategy(me, game)
@@ -181,9 +243,19 @@ class MyStrategy:
         self.setup_strafe()
 
         if me.life < me.max_life * LOW_HP_FACTOR:
-            print("Retreat")
-            self.go_to_unit(self.get_previous_waypoint(), force=True)
+            print("Medic!")
+            self.retreat()
             return
+
+        vanguard = self.get_vanguard()
+        if False:  # vanguard is not None:
+            print(vanguard)
+            vanguard_distance = self.get_unit_distance_to_lane(self.lane, vanguard)
+            my_distance = self.get_unit_distance_to_lane(self.lane, self.me)
+            if my_distance + 100 < vanguard_distance:
+                print("Retreat")
+                self.retreat()
+                return
 
         nearest_target = self.get_nearest_target()
         if nearest_target is not None:
@@ -194,14 +266,18 @@ class MyStrategy:
                 print("Turn to target")
 
                 if abs(angle) < game.staff_sector / 2.0:
-                    print("Attack")
-                    move.action = ActionType.MAGIC_MISSILE
+                    if distance <= game.staff_range:
+                        print("Hard attack")
+                        move.action = ActionType.STAFF
+                    else:
+                        print("Attack")
+                        move.action = ActionType.MAGIC_MISSILE
                     move.cast_angle = angle
                     move.min_cast_distance = distance - nearest_target.radius + game.magic_missile_radius
 
                 if self.get_free_attack_distance() < 0:
-                    print("Keeping away")
-                    self.go_to_unit(self.get_previous_waypoint(), force=True)
+                    print("Under attack!")
+                    self.retreat()
 
                 return
 
