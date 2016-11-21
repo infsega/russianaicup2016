@@ -75,14 +75,47 @@ class MyStrategy:
         self.game = game
         self.current_move = move
 
+    def select_target(self, target1: LivingUnit, target2: LivingUnit):
+        if target1 is None:
+            return target2
+        if target2 is None:
+            return target1
+
+        angle1 = abs(self.me.get_angle_to_unit(target1))
+        angle2 = abs(self.me.get_angle_to_unit(target2))
+        angle_criteria1 = (angle1 < self.game.staff_sector)
+        angle_criteria2 = (angle2 < self.game.staff_sector)
+
+        if angle_criteria1 < angle_criteria2:
+            return target1
+
+        elif angle_criteria1 > angle_criteria2:
+            return target2
+
+        if angle_criteria1 and angle_criteria2:
+            if (target1 is Wizard) and (target2 is not Wizard):
+                return target1
+            if (target2 is Wizard) and (target1 is not Wizard):
+                return target2
+            if target1.life < target2.life:
+                return target1
+            if target2.life < target1.life:
+                return target2
+
+        distance1 = self.me.get_distance_to_unit(target1) - target1.radius * 0.6
+        distance2 = self.me.get_distance_to_unit(target2) - target2.radius * 0.6
+        if distance1 < distance2:
+            return target1
+        else:
+            return target2
+
     def get_nearest_target(self) -> LivingUnit:
         nearest_target = None
-        nearest_target_distance = None
         for target in self.enemy_units():
-            distance = self.me.get_distance_to_unit(target)
-            if (nearest_target_distance is None) or (distance < nearest_target_distance):
-                nearest_target = target
-                nearest_target_distance = distance
+            distance = self.me.get_distance_to_unit(target) - target.radius * 0.6  # allow minimal collision
+            if distance > self.me.cast_range:
+                continue
+            nearest_target = self.select_target(nearest_target, target)
         return nearest_target
 
     def get_unit_distance_on_lane(self, lane: LaneType, unit):
@@ -262,14 +295,12 @@ class MyStrategy:
     def retreat(self):
         distance_to_check = self.me.radius * 0.5
         x = self.me.x - math.cos(self.me.angle) * distance_to_check
-        y = self.me.y + math.sin(self.me.angle) * distance_to_check
+        y = self.me.y - math.sin(self.me.angle) * distance_to_check
 
         x_locked = (x - self.me.radius < 0) or (x + self.me.radius > self.game.map_size)
         y_locked = (y - self.me.radius < 0) or (y + self.me.radius > self.game.map_size)
         if x_locked or y_locked:
             return False
-
-        print(self.me.x, self.me.radius, x, x - self.me.radius)
 
         for unit in self.world.buildings + self.world.minions + self.world.trees + self.world.wizards:
             if unit.id != self.me.id:
@@ -301,8 +332,8 @@ class MyStrategy:
             if my_distance + 100 > vanguard_distance:
                 if self.retreat():
                     print("There is no vanguard. Retreat.")
-                    return
-                print("There is no vanguard. Cannot retreat")
+                else:
+                    print("There is no vanguard. Cannot retreat")
                 move_forward = False
 
         nearest_target = self.get_nearest_target()
@@ -324,7 +355,6 @@ class MyStrategy:
                 if self.get_free_attack_distance() < 0:
                     if self.retreat():
                         print("Under attack! Retreat")
-                        return
                     else:
                         print("Under attack! Failed to retreat")
 
