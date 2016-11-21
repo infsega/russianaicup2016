@@ -261,13 +261,15 @@ class MyStrategy:
 
     def retreat(self):
         distance_to_check = self.me.radius * 0.5
-        x = self.me.x + math.cos(self.me.angle) * distance_to_check
-        y = self.me.y - math.sin(self.me.angle) * distance_to_check
+        x = self.me.x - math.cos(self.me.angle) * distance_to_check
+        y = self.me.y + math.sin(self.me.angle) * distance_to_check
 
         x_locked = (x - self.me.radius < 0) or (x + self.me.radius > self.game.map_size)
         y_locked = (y - self.me.radius < 0) or (y + self.me.radius > self.game.map_size)
         if x_locked or y_locked:
             return False
+
+        print(self.me.x, self.me.radius, x, x - self.me.radius)
 
         for unit in self.world.buildings + self.world.minions + self.world.trees + self.world.wizards:
             if unit.id != self.me.id:
