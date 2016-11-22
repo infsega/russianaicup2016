@@ -74,6 +74,7 @@ class MyStrategy:
         self.strafe_line = 0
         self.strafe_dir = -1
         self.last_waypoint = None
+        self.tick = None
 
     def setup_strafe(self):
         if self.strafe_line == 0:
@@ -84,6 +85,11 @@ class MyStrategy:
         self.strafe_line -= 1
 
     def initialize_tick(self, me: Wizard, world: World, game: Game, move: Move):
+        if self.tick is None:
+            self.initialize_strategy(me, game, move)
+            self.tick = 0
+        else:
+            self.tick += 1
         self.me = me
         self.world = world
         self.game = game
@@ -228,8 +234,6 @@ class MyStrategy:
         return first_waypoint
 
     def initialize_strategy(self, me: Wizard, game: Game, move: Move):
-        if self.game is not None:
-            return
         random.seed(game.random_seed)
         map_size = game.map_size
         self.waypoints_by_lane = {
@@ -237,7 +241,7 @@ class MyStrategy:
                 Point2D(100.0, map_size - 100.0),
                 random.choice([Point2D(600.0, map_size - 200.0), Point2D(200.0, map_size - 600.0)]),
                 Point2D(800.0, map_size - 800.0),
-                Point2D(map_size - 1400.0, 1400.0)
+                Point2D(map_size - 1200.0, 1200.0)
             ],
             LaneType.TOP: [
                 Point2D(50.0, map_size - 800.0),
@@ -292,7 +296,7 @@ class MyStrategy:
                 if msg.lane in [LaneType.TOP, LaneType.MIDDLE, LaneType.BOTTOM]:
                     self.lane = msg.lane
 
-        # self.lane = LaneType.BOTTOM
+        # self.lane = LaneType.MIDDLE
         self.waypoints = self.waypoints_by_lane[self.lane]
 
     def get_attack_distance(self, unit):
@@ -317,29 +321,80 @@ class MyStrategy:
         if next_waypoint != self.last_waypoint:
             self.last_waypoint = next_waypoint
             print("Go to next waypoint")
+        self.go_to_waypoint(next_waypoint)
 
+    def get_closest_obstacle(self):
+        dx = math.cos(self.me.angle) * self.game.staff_range
+        dy = math.sin(self.me.angle) * self.game.staff_range
+        src = Point2D(self.me.x, self.me.y)
+        dst = Point2D(self.me.x + dx, self.me.y + dy)
+        closest_obstacle = None
+        distance_to_closest_obstacle = None
+        for obstacle in self.world.trees + self.enemy_units():
+            if distance_to_segment(obstacle, src, dst) > self.me.radius + obstacle.radius:
+                continue
+            distance_to_obstacle = self.me.get_distance_to_unit(obstacle)
+            if (distance_to_closest_obstacle is None) or (distance_to_obstacle < distance_to_closest_obstacle):
+                closest_obstacle = obstacle
+                distance_to_closest_obstacle = distance_to_obstacle
+        return closest_obstacle
+
+    def setup_attack(self, target):
+        angle = self.me.get_angle_to_unit(target)
+        self.current_move.turn = angle
+
+        if abs(angle) > self.game.staff_sector / 2.0:
+            return True
+
+        if self.me.remaining_action_cooldown_ticks > 0:
+            return False
+
+        distance = self.me.get_distance_to_unit(target)
+        if distance < self.game.staff_range + target.radius:
+            if self.me.remaining_cooldown_ticks_by_action[ActionType.STAFF] == 0:
+                self.current_move.action = ActionType.STAFF
+                print("STAFF ATTACK")
+        if distance < self.me.cast_range + target.radius:
+            if self.me.remaining_cooldown_ticks_by_action[ActionType.MAGIC_MISSILE] == 0:
+                print("MISSILE")
+                self.current_move.cast_angle = angle
+                self.current_move.min_cast_distance = distance - target.radius + self.game.magic_missile_radius
+                self.current_move.action = ActionType.MAGIC_MISSILE
+
+    def go_to_waypoint(self, waypoint):
+        can_move = True
         distance_to_check = self.me.radius * 0.5
         x = self.me.x + math.cos(self.me.angle) * distance_to_check
         y = self.me.y + math.sin(self.me.angle) * distance_to_check
-        for tree in self.world.trees:
-            if collide(x, y, self.me.radius, tree):
-                angle = self.me.get_angle_to_unit(tree)
-                self.current_move.turn = angle
-                if abs(angle) < self.game.staff_sector / 2.0:
-                    self.current_move.action = ActionType.STAFF
-                return
         for unit in self.world.buildings + self.world.wizards + self.world.minions:
             if unit.id == self.me.id:
                 continue
             if collide(x, y, self.me.radius, unit):
                 print("Cannot move")
-                return
-        angle = self.me.get_angle_to(next_waypoint.x, next_waypoint.y)
+                can_move = False
+                break
+        angle = self.me.get_angle_to(waypoint.x, waypoint.y)
         self.current_move.turn = angle
-        if abs(angle) < self.game.staff_sector / 4.0:
-            self.current_move.speed = self.game.wizard_forward_speed
+
+        if abs(angle) > self.game.staff_sector / 4.0:
+            return True
+
+        obstacle = self.get_closest_obstacle()
+        if obstacle is not None:
+            self.setup_attack(obstacle)
+            return True
+
+        if not can_move:
+            return False
+        self.current_move.speed = self.game.wizard_forward_speed
+        return True
+
+    def visible_by_enemy(self):
+        return any(self.me.get_distance_to_unit(unit) < unit.vision_range for unit in self.enemy_units())
 
     def retreat(self):
+        previous_waypoint = self.get_previous_waypoint()
+
         distance_to_check = self.me.radius * 0.5
         x = self.me.x - math.cos(self.me.angle) * distance_to_check
         y = self.me.y - math.sin(self.me.angle) * distance_to_check
@@ -354,11 +409,34 @@ class MyStrategy:
                 if collide(x, y, self.me.radius, unit):
                     return False
 
+        angle = -self.me.get_angle_to(previous_waypoint.x, previous_waypoint.y)
+        self.current_move.turn = angle
         self.current_move.speed = -self.game.wizard_backward_speed
         return True
 
+    def find_closest_bonus(self):
+        bonus_ticks = self.game.bonus_appearance_interval_ticks
+        if self.tick % bonus_ticks > bonus_ticks * 4 / 5:
+            if self.lane == LaneType.TOP:
+                bonus_pos = self.game.map_size * 0.3
+            elif self.lane == LaneType.MIDDLE:
+                bonus_pos = self.game.map_size * 0.3
+            else:
+                bonus_pos = self.game.map_size * 0.7
+            bonus = Point2D(bonus_pos, bonus_pos)
+            if self.me.get_distance_to_unit(bonus) < self.me.vision_range * 0.7:
+                return None
+            return bonus
+        closest_bonus = None
+        closest_bonus_distance = None
+        for bonus in self.world.bonuses:
+            bonus_distance = self.me.get_distance_to_unit(bonus)
+            if (closest_bonus_distance is None) or (closest_bonus_distance > bonus_distance):
+                closest_bonus_distance = bonus_distance
+                closest_bonus = bonus
+        return closest_bonus
+
     def move(self, me: Wizard, world: World, game: Game, move: Move):
-        self.initialize_strategy(me, game, move)
         self.initialize_tick(me, world, game, move)
 
         self.setup_strafe()
@@ -371,41 +449,36 @@ class MyStrategy:
                 return
             print("Medic needed, but no chance to retreat")
             move_forward = False
+        else:
+            bonus = self.find_closest_bonus()
+            if bonus is not None:
+                self.go_to_waypoint(bonus)
+                return
 
         vanguard = self.get_vanguard()
         if vanguard is not None:
             vanguard_distance = self.get_unit_distance_on_lane(self.lane, vanguard)
             my_distance = self.get_unit_distance_on_lane(self.lane, self.me)
-            if my_distance + 100 > vanguard_distance:
-                if self.retreat():
-                    print("There is no vanguard. Retreat.")
+            if my_distance + 150 > vanguard_distance:
+                if my_distance > vanguard_distance + 100:
+                    self.go_to_waypoint(vanguard)
                 else:
-                    print("There is no vanguard. Cannot retreat")
+                    if self.retreat():
+                        print("There is no vanguard. Retreat.")
+                    else:
+                        print("There is no vanguard. Cannot retreat")
                 move_forward = False
+
+        if self.get_closest_attacker() is not None:
+            if self.retreat():
+                print("Under attack! Retreat")
+            else:
+                print("Under attack! Failed to retreat")
 
         nearest_target = self.get_nearest_target()
         if nearest_target is not None:
-            distance = me.get_distance_to_unit(nearest_target)
-            if distance <= me.cast_range:
-                angle = me.get_angle_to_unit(nearest_target)
-                move.turn = angle
-                if abs(angle) < game.staff_sector / 2.0:
-                    if distance <= game.staff_range:
-                        print("Hard attack")
-                        move.action = ActionType.STAFF
-                    else:
-                        print("Attack")
-                        move.action = ActionType.MAGIC_MISSILE
-                    move.cast_angle = angle
-                    move.min_cast_distance = distance - nearest_target.radius + game.magic_missile_radius
-
-                if self.get_closest_attacker() is not None:
-                    if self.retreat():
-                        print("Under attack! Retreat")
-                    else:
-                        print("Under attack! Failed to retreat")
-
-                return
+            self.setup_attack(nearest_target)
+            return
 
         if move_forward:
             self.go_to_next_waypoint()
