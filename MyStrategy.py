@@ -15,7 +15,7 @@ from model.Message import Message
 import math
 import random
 
-WAYPOINT_RADIUS = 100.0
+WAYPOINT_RADIUS = 150.0
 LOW_HP_FACTOR = 0.25
 
 
@@ -240,13 +240,13 @@ class MyStrategy:
                 Point2D(map_size - 1400.0, 1400.0)
             ],
             LaneType.TOP: [
-                Point2D(100.0, map_size - 100.0),
-                Point2D(100.0, map_size - 400.0),
-                Point2D(200.0, map_size - 800.0),
+                Point2D(50.0, map_size - 800.0),
                 Point2D(200.0, map_size * 0.75),
                 Point2D(200.0, map_size * 0.50),
                 Point2D(200.0, map_size * 0.25),
-                Point2D(200.0, 200.0),
+                Point2D(200.0, 800.0),
+                Point2D(400.0, 400.0),
+                Point2D(800.0, 200.0),
                 Point2D(map_size * 0.25, 200.0),
                 Point2D(map_size * 0.50, 200.0),
                 Point2D(map_size * 0.65, 200.0),
@@ -254,13 +254,12 @@ class MyStrategy:
                 # Point2D(map_size - 800.0, 200.0)
             ],
             LaneType.BOTTOM: [
-                Point2D(100.0, map_size - 100.0),
-                Point2D(400.0, map_size - 100.0),
-                Point2D(800.0, map_size - 200.0),
-                Point2D(map_size * 0.25, map_size - 200.0),
+                Point2D(800.0, map_size - 50.0),
                 Point2D(map_size * 0.50, map_size - 200.0),
                 Point2D(map_size * 0.75, map_size - 200.0),
-                Point2D(map_size - 200.0, map_size - 200.0),
+                Point2D(map_size - 800.0, map_size - 200.0),
+                Point2D(map_size - 400.0, map_size - 400.0),
+                Point2D(map_size - 200.0, map_size - 800.0),
                 Point2D(map_size - 200.0, map_size * 0.75),
                 Point2D(map_size - 200.0, map_size * 0.50),
                 Point2D(map_size - 200.0, map_size * 0.35),
@@ -293,6 +292,7 @@ class MyStrategy:
                 if msg.lane in [LaneType.TOP, LaneType.MIDDLE, LaneType.BOTTOM]:
                     self.lane = msg.lane
 
+        # self.lane = LaneType.BOTTOM
         self.waypoints = self.waypoints_by_lane[self.lane]
 
     def get_attack_distance(self, unit):
@@ -327,6 +327,12 @@ class MyStrategy:
                 self.current_move.turn = angle
                 if abs(angle) < self.game.staff_sector / 2.0:
                     self.current_move.action = ActionType.STAFF
+                return
+        for unit in self.world.buildings + self.world.wizards + self.world.minions:
+            if unit.id == self.me.id:
+                continue
+            if collide(x, y, self.me.radius, unit):
+                print("Cannot move")
                 return
         angle = self.me.get_angle_to(next_waypoint.x, next_waypoint.y)
         self.current_move.turn = angle
