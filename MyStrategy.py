@@ -48,6 +48,19 @@ class Point2D:
         return self.get_distance_to(unit.x, unit.y)
 
 
+def target_priority(target):
+    if target is None:
+        return 0
+    if target is Minion:
+        if target.type == MinionType.ORC_WOODCUTTER:
+            return 1
+        else:
+            return 2
+    if target is Building:
+        return 3
+    return 4
+
+
 class MyStrategy:
 
     def __init__(self):
@@ -64,9 +77,10 @@ class MyStrategy:
 
     def setup_strafe(self):
         if self.strafe_line == 0:
-            self.strafe_line = random.randint(10, 30)
+            self.strafe_line = random.randint(20, 40)
             self.strafe_dir = -self.strafe_dir
-        self.current_move.strafe_speed = self.strafe_dir * random.uniform(0, self.game.wizard_strafe_speed)
+        strafe_speed = random.uniform(self.game.wizard_strafe_speed / 2.0, self.game.wizard_strafe_speed)
+        self.current_move.strafe_speed = self.strafe_dir * strafe_speed
         self.strafe_line -= 1
 
     def initialize_tick(self, me: Wizard, world: World, game: Game, move: Move):
@@ -76,10 +90,12 @@ class MyStrategy:
         self.current_move = move
 
     def select_target(self, target1: LivingUnit, target2: LivingUnit):
-        if target1 is None:
-            return target2
-        if target2 is None:
+        priority1 = target_priority(target1)
+        priority2 = target_priority(target2)
+        if priority1 > priority2:
             return target1
+        if priority2 > priority1:
+            return target2
 
         angle1 = abs(self.me.get_angle_to_unit(target1))
         angle2 = abs(self.me.get_angle_to_unit(target2))
@@ -88,15 +104,10 @@ class MyStrategy:
 
         if angle_criteria1 < angle_criteria2:
             return target1
-
-        elif angle_criteria1 > angle_criteria2:
+        if angle_criteria1 > angle_criteria2:
             return target2
 
         if angle_criteria1 and angle_criteria2:
-            if (target1 is Wizard) and (target2 is not Wizard):
-                return target1
-            if (target2 is Wizard) and (target1 is not Wizard):
-                return target2
             if target1.life < target2.life:
                 return target1
             if target2.life < target1.life:
@@ -110,9 +121,12 @@ class MyStrategy:
             return target2
 
     def get_nearest_target(self) -> LivingUnit:
+        attacker = self.get_closest_attacker()
+        if attacker is not None:
+            return attacker
         nearest_target = None
         for target in self.enemy_units():
-            distance = self.me.get_distance_to_unit(target) - target.radius * 0.6  # allow minimal collision
+            distance = self.me.get_distance_to_unit(target) - target.radius  # allow minimal collision
             if distance > self.me.cast_range:
                 continue
             nearest_target = self.select_target(nearest_target, target)
@@ -171,6 +185,18 @@ class MyStrategy:
         attack_distance = self.get_attack_distance(unit)
         return distance - 1.1 * attack_distance
 
+    def get_closest_attacker(self):
+        closest_attacker = None
+        closest_attacker_distance = None
+        for attacker in self.enemy_units():
+            attacker_distance = self.get_unit_free_attack_distance(attacker)
+            if attacker_distance > 0:
+                continue
+            if (closest_attacker is None) or attacker_distance < closest_attacker_distance:
+                closest_attacker = attacker
+                closest_attacker_distance = attacker_distance
+        return closest_attacker
+
     def enemy_units(self):
         targets = self.world.buildings + self.world.wizards + self.world.minions
         return [unit for unit in targets if unit.faction not in [Faction.NEUTRAL, self.me.faction]]
@@ -178,9 +204,6 @@ class MyStrategy:
     def allies(self):
         units = self.world.buildings + self.world.wizards + self.world.minions
         return [unit for unit in units if (unit.faction == self.me.faction) and (unit.id != self.me.id)]
-
-    def get_free_attack_distance(self):
-        return min([self.get_unit_free_attack_distance(unit) for unit in self.enemy_units()])
 
     def get_next_waypoint(self):
         last_waypoint = self.waypoints[-1]
@@ -214,7 +237,7 @@ class MyStrategy:
                 Point2D(100.0, map_size - 100.0),
                 random.choice([Point2D(600.0, map_size - 200.0), Point2D(200.0, map_size - 600.0)]),
                 Point2D(800.0, map_size - 800.0),
-                Point2D(map_size - 800.0, 800.0)
+                Point2D(map_size - 1400.0, 1400.0)
             ],
             LaneType.TOP: [
                 Point2D(100.0, map_size - 100.0),
@@ -226,8 +249,9 @@ class MyStrategy:
                 Point2D(200.0, 200.0),
                 Point2D(map_size * 0.25, 200.0),
                 Point2D(map_size * 0.50, 200.0),
-                Point2D(map_size * 0.75, 200.0),
-                Point2D(map_size - 600.0, 200.0)
+                Point2D(map_size * 0.65, 200.0),
+                # Point2D(map_size * 0.75, 200.0),
+                # Point2D(map_size - 800.0, 200.0)
             ],
             LaneType.BOTTOM: [
                 Point2D(100.0, map_size - 100.0),
@@ -239,8 +263,9 @@ class MyStrategy:
                 Point2D(map_size - 200.0, map_size - 200.0),
                 Point2D(map_size - 200.0, map_size * 0.75),
                 Point2D(map_size - 200.0, map_size * 0.50),
-                Point2D(map_size - 200.0, map_size * 0.25),
-                Point2D(map_size - 200.0, 600.0)
+                Point2D(map_size - 200.0, map_size * 0.35),
+                # Point2D(map_size - 200.0, map_size * 0.25),
+                # Point2D(map_size - 200.0, 600.0)
             ]
         }
 
@@ -283,11 +308,27 @@ class MyStrategy:
         else:
             return 0
 
-    def go_to_unit(self, unit):
-        self.go_to(unit.x, unit.y)
+    def go_to_next_waypoint(self):
+        if self.me.get_distance_to_unit(self.waypoints[-1]) < WAYPOINT_RADIUS:
+            return
+        next_waypoint = self.get_next_waypoint()
+        if next_waypoint is None:
+            return
+        if next_waypoint != self.last_waypoint:
+            self.last_waypoint = next_waypoint
+            print("Go to next waypoint")
 
-    def go_to(self, x, y):
-        angle = self.me.get_angle_to(x, y)
+        distance_to_check = self.me.radius * 0.5
+        x = self.me.x + math.cos(self.me.angle) * distance_to_check
+        y = self.me.y + math.sin(self.me.angle) * distance_to_check
+        for tree in self.world.trees:
+            if collide(x, y, self.me.radius, tree):
+                angle = self.me.get_angle_to_unit(tree)
+                self.current_move.turn = angle
+                if abs(angle) < self.game.staff_sector / 2.0:
+                    self.current_move.action = ActionType.STAFF
+                return
+        angle = self.me.get_angle_to(next_waypoint.x, next_waypoint.y)
         self.current_move.turn = angle
         if abs(angle) < self.game.staff_sector / 4.0:
             self.current_move.speed = self.game.wizard_forward_speed
@@ -352,7 +393,7 @@ class MyStrategy:
                     move.cast_angle = angle
                     move.min_cast_distance = distance - nearest_target.radius + game.magic_missile_radius
 
-                if self.get_free_attack_distance() < 0:
+                if self.get_closest_attacker() is not None:
                     if self.retreat():
                         print("Under attack! Retreat")
                     else:
@@ -361,8 +402,4 @@ class MyStrategy:
                 return
 
         if move_forward:
-            next_waypoint = self.get_next_waypoint()
-            if next_waypoint != self.last_waypoint:
-                self.last_waypoint = next_waypoint
-                print("Go to next waypoint")
-            self.go_to_unit(next_waypoint)
+            self.go_to_next_waypoint()
