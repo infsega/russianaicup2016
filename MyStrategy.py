@@ -182,7 +182,7 @@ class MyStrategy:
 
     def get_unit_free_attack_distance(self, unit):
         distance = self.me.get_distance_to_unit(unit)
-        attack_distance = self.get_attack_distance(unit)
+        attack_distance = self.get_attack_distance(unit) + self.me.radius
         return distance - 1.1 * attack_distance
 
     def get_closest_attacker(self):
