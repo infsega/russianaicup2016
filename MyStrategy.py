@@ -41,15 +41,16 @@ def sectors_intersects(sector1, sector2):
         return False
     return True
 
+
 def target_priority(target):
     if target is None:
         return 0
-    if target is Minion:
+    if type(target) is Minion:
         if target.type == MinionType.ORC_WOODCUTTER:
-            return 1
-        else:
             return 2
-    if target is Building:
+        else:
+            return 1
+    if type(target) is Building:
         return 3
     return 4
 
@@ -80,7 +81,6 @@ class MyStrategy:
         self.strafe_line = 0
         self.strafe_dir = -1
         self.last_waypoint = None
-        self.tick = None
 
     def setup_strafe(self):
         if self.strafe_line == 0:
@@ -91,11 +91,8 @@ class MyStrategy:
         self.strafe_line -= 1
 
     def initialize_tick(self, me: Wizard, world: World, game: Game, move: Move):
-        if self.tick is None:
+        if self.me is None:
             self.initialize_strategy(me, game, move)
-            self.tick = 0
-        else:
-            self.tick += 1
         self.me = me
         self.world = world
         self.game = game
@@ -161,7 +158,7 @@ class MyStrategy:
         return min(distance_to_segment(unit, wp[i], wp[i+1]) for i in range(len(wp) - 1))
 
     def get_unit_lane(self, unit):
-        if (unit is Building) and (unit.type == BuildingType.FACTION_BASE):
+        if (type(unit) is Building) and (unit.type == BuildingType.FACTION_BASE):
             return None
         closest_lane = None
         distance_to_closest_lane = None
@@ -181,33 +178,37 @@ class MyStrategy:
             return lane, 0
         return lane, self.get_unit_distance_on_lane(lane, unit)
 
+    def get_nexus(self):
+        return next(building for building in self.world.buildings
+                    if building.type == BuildingType.FACTION_BASE and building.faction == self.me.faction)
+
     def get_vanguard(self) -> LivingUnit:
-        vanguard = None
-        vanguard_distance = None
+        vanguard = self.get_nexus()
+        vanguard_distance = 0
         for ally in self.allies():
             lane, distance = self.get_position(ally)
-            if lane not in [None, self.lane]:
+            if lane != self.lane:
                 continue
-            if (vanguard_distance is None) or (distance > vanguard_distance):
+            if distance > vanguard_distance:
                 vanguard = ally
                 vanguard_distance = distance
+        print("vanguard: %f %f" % (vanguard.x, vanguard.y), vanguard)
         return vanguard
-
-    def get_unit_free_attack_distance(self, unit):
-        distance = self.me.get_distance_to_unit(unit)
-        attack_distance = self.get_attack_distance(unit) + self.me.radius
-        return distance - 1.1 * attack_distance
 
     def get_closest_attacker(self):
         closest_attacker = None
         closest_attacker_distance = None
-        for attacker in self.enemy_units():
-            attacker_distance = self.get_unit_free_attack_distance(attacker)
-            if attacker_distance > 0:
+        for attacker in self.world.minions:
+            if attacker.type != MinionType.ORC_WOODCUTTER:
                 continue
-            if (closest_attacker is None) or attacker_distance < closest_attacker_distance:
+            distance = self.me.get_distance_to_unit(attacker) - self.me.radius
+            attack_distance = self.get_attack_distance(attacker)
+            if attack_distance < distance:
+                continue
+            print("Attacker: ", attacker)
+            if (closest_attacker is None) or attack_distance < closest_attacker_distance:
                 closest_attacker = attacker
-                closest_attacker_distance = attacker_distance
+                closest_attacker_distance = attack_distance
         return closest_attacker
 
     def enemy_units(self):
@@ -307,16 +308,17 @@ class MyStrategy:
         self.waypoints = self.waypoints_by_lane[self.lane]
 
     def get_attack_distance(self, unit):
-        if unit is Wizard:
-            return unit.staff_range
-        elif unit is Building:
+        if type(unit) is Wizard:
+            return unit.cast_range
+        elif type(unit) is Building:
             return unit.attack_range
-        elif unit is Minion:
+        elif type(unit) is Minion:
             if unit.type == MinionType.ORC_WOODCUTTER:
-                return self.game.orc_woodcutter_attack_range
+                return self.game.orc_woodcutter_attack_range * 2
             elif unit.type == MinionType.FETISH_BLOWDART:
                 return self.game.fetish_blowdart_attack_range
         else:
+            print("Unknown enemy", unit)
             return 0
 
     def go_to_next_waypoint(self):
@@ -446,9 +448,8 @@ class MyStrategy:
 
     def find_closest_bonus(self):
         bonus_ticks = self.game.bonus_appearance_interval_ticks
-        # ticks = self.tick % (2 * bonus_ticks)
-        ticks = self.tick
-        if bonus_ticks * 4 / 5 < ticks < bonus_ticks:
+        ticks = self.world.tick_index
+        if bonus_ticks * 7 / 8 < ticks < bonus_ticks:
             if self.lane == LaneType.TOP:
                 bonus_pos = self.game.map_size * 0.3
             elif self.lane == LaneType.MIDDLE:
@@ -491,30 +492,37 @@ class MyStrategy:
 
         vanguard = self.get_vanguard()
         if vanguard is not None:
-            vanguard_distance = self.get_unit_distance_on_lane(self.lane, vanguard)
-            my_distance = self.get_unit_distance_on_lane(self.lane, self.me)
-            if my_distance + 100 > vanguard_distance:
-                if self.get_unit_lane(self.me) != self.lane:
-                    self.go_to_waypoint(vanguard)
-                elif my_distance > vanguard_distance + 100:
-                    self.go_to_waypoint(vanguard)
-                else:
-                    if self.retreat():
-                        print("There is no vanguard. Retreat.")
-                    else:
-                        print("There is no vanguard. Cannot retreat")
+            if self.get_unit_lane(self.me) != self.lane:
+                print("Out of lane, go to vanguard")
+                self.go_to_waypoint(vanguard)
                 move_forward = False
+            else:
+                vanguard_distance = self.get_unit_distance_on_lane(self.lane, vanguard)
+                my_distance = self.get_unit_distance_on_lane(self.lane, self.me)
+                if my_distance + 100 > vanguard_distance:
+                    if my_distance > vanguard_distance + 100:
+                        self.go_to_waypoint(vanguard)
+                    else:
+                        if self.retreat():
+                            print("There is no vanguard. Retreat.")
+                        else:
+                            print("There is no vanguard. Cannot retreat")
+                    move_forward = False
 
         if self.get_closest_attacker() is not None:
             if self.retreat():
                 print("Under attack! Retreat")
             else:
                 print("Under attack! Failed to retreat")
+        else:
+            print("There is no attacker")
 
         nearest_target = self.get_nearest_target()
         if nearest_target is not None:
             self.setup_attack(nearest_target)
             return
+
+        print("No target to attack")
 
         if move_forward:
             self.go_to_next_waypoint()
