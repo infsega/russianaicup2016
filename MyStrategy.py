@@ -32,17 +32,14 @@ def distance_to_segment(p, v, w):
     return p.get_distance_to_unit(intersection_point(p, v, w))
 
 
-class Point2D:
-    def __init__(self, x, y):
-        self.x = x
-        self.y = y
-
-    def get_distance_to(self, x, y):
-        return math.hypot(x - self.x, y - self.y)
-
-    def get_distance_to_unit(self, unit):
-        return self.get_distance_to(unit.x, unit.y)
-
+def sectors_intersects(sector1, sector2):
+    min1, max1 = sector1
+    min2, max2 = sector2
+    if max1 < min2:
+        return False
+    if min1 > max2:
+        return False
+    return True
 
 def target_priority(target):
     if target is None:
@@ -55,6 +52,19 @@ def target_priority(target):
     if target is Building:
         return 3
     return 4
+
+
+class Point2D:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.radius = 0
+
+    def get_distance_to(self, x, y):
+        return math.hypot(x - self.x, y - self.y)
+
+    def get_distance_to_unit(self, unit):
+        return self.get_distance_to(unit.x, unit.y)
 
 
 class MyStrategy:
@@ -99,10 +109,8 @@ class MyStrategy:
         if priority2 > priority1:
             return target2
 
-        angle1 = abs(self.me.get_angle_to_unit(target1))
-        angle2 = abs(self.me.get_angle_to_unit(target2))
-        angle_criteria1 = (angle1 < self.game.staff_sector)
-        angle_criteria2 = (angle2 < self.game.staff_sector)
+        angle_criteria1 = self.is_attack_angle(target1)
+        angle_criteria2 = self.is_attack_angle(target2)
 
         if angle_criteria1 < angle_criteria2:
             return target1
@@ -162,6 +170,9 @@ class MyStrategy:
             if (closest_lane is None) or (distance_to_closest_lane > distance_to_lane):
                 closest_lane = lane
                 distance_to_closest_lane = distance_to_lane
+        if distance_to_closest_lane is not None:
+            if distance_to_closest_lane > 400:
+                return None
         return closest_lane
 
     def get_position(self, unit):
@@ -335,12 +346,33 @@ class MyStrategy:
                 distance_to_closest_obstacle = distance_to_obstacle
         return closest_obstacle
 
+    def is_attack_angle(self, target):
+        angle = abs(self.me.get_angle_to_unit(target))
+        if angle < self.game.staff_sector / 2.0:
+            return True
+
+        if angle > math.pi / 2:
+            return False
+
+        dx = target.x - self.me.x
+        dy = target.y - self.me.y
+        distance = math.hypot(dx, dy)
+        dx *= (target.radius / distance)
+        dy *= (target.radius / distance)
+
+        angle1 = self.me.get_angle_to(target.x - dy, target.y + dx)
+        angle2 = self.me.get_angle_to(target.x + dy, target.y - dx)
+
+        target_sector = min(angle1,angle2), max(angle1, angle2)
+        attack_sector = -self.game.staff_sector / 2.0, +self.game.staff_sector / 2.0
+        return sectors_intersects(target_sector, attack_sector)
+
     def setup_attack(self, target):
         angle = self.me.get_angle_to_unit(target)
         self.current_move.turn = angle
         self.current_move.strafe_speed = 0
 
-        if abs(angle) > self.game.staff_sector / 2.0:
+        if not self.is_attack_angle(target):
             return True
 
         if self.me.remaining_action_cooldown_ticks > 0:
@@ -414,7 +446,8 @@ class MyStrategy:
 
     def find_closest_bonus(self):
         bonus_ticks = self.game.bonus_appearance_interval_ticks
-        if self.tick % bonus_ticks > bonus_ticks * 4 / 5:
+        ticks = self.tick % (2 * bonus_ticks)
+        if bonus_ticks * 4 / 5 < ticks < bonus_ticks:
             if self.lane == LaneType.TOP:
                 bonus_pos = self.game.map_size * 0.3
             elif self.lane == LaneType.MIDDLE:
@@ -457,8 +490,10 @@ class MyStrategy:
         if vanguard is not None:
             vanguard_distance = self.get_unit_distance_on_lane(self.lane, vanguard)
             my_distance = self.get_unit_distance_on_lane(self.lane, self.me)
-            if my_distance + 150 > vanguard_distance:
-                if my_distance > vanguard_distance + 100:
+            if my_distance + 100 > vanguard_distance:
+                if self.get_unit_lane(self.me) != self.lane:
+                    self.go_to_waypoint(vanguard)
+                elif my_distance > vanguard_distance + 100:
                     self.go_to_waypoint(vanguard)
                 else:
                     if self.retreat():
