@@ -32,10 +32,6 @@ def distance_to_segment(p, v, w):
     return p.get_distance_to_unit(intersection_point(p, v, w))
 
 
-def collide(x, y, radius, unit: LivingUnit):
-    return unit.get_distance_to(x, y) < unit.radius + radius
-
-
 class Point2D:
     def __init__(self, x, y):
         self.x = x
@@ -342,6 +338,7 @@ class MyStrategy:
     def setup_attack(self, target):
         angle = self.me.get_angle_to_unit(target)
         self.current_move.turn = angle
+        self.current_move.strafe_speed = 0
 
         if abs(angle) > self.game.staff_sector / 2.0:
             return True
@@ -364,12 +361,13 @@ class MyStrategy:
     def go_to_waypoint(self, waypoint):
         can_move = True
         distance_to_check = self.me.radius * 0.5
-        x = self.me.x + math.cos(self.me.angle) * distance_to_check
-        y = self.me.y + math.sin(self.me.angle) * distance_to_check
+        dst = Point2D(
+            self.me.x + math.cos(self.me.angle) * distance_to_check,
+            self.me.y + math.sin(self.me.angle) * distance_to_check)
         for unit in self.world.buildings + self.world.wizards + self.world.minions:
             if unit.id == self.me.id:
                 continue
-            if collide(x, y, self.me.radius, unit):
+            if distance_to_segment(unit, self.me, dst) < self.me.radius + unit.radius:
                 print("Cannot move")
                 can_move = False
                 break
@@ -406,7 +404,7 @@ class MyStrategy:
 
         for unit in self.world.buildings + self.world.minions + self.world.trees + self.world.wizards:
             if unit.id != self.me.id:
-                if collide(x, y, self.me.radius, unit):
+                if distance_to_segment(unit, self.me, Point2D(x, y)) < self.me.radius + unit.radius:
                     return False
 
         angle = -self.me.get_angle_to(previous_waypoint.x, previous_waypoint.y)
