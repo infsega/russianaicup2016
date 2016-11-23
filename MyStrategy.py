@@ -197,7 +197,7 @@ class MyStrategy:
 
     def get_closest_attacker(self):
         closest_attacker = None
-        closest_attacker_distance = None
+        closest_attacker_life = None
         for attacker in self.world.minions:
             if attacker.type != MinionType.ORC_WOODCUTTER:
                 continue
@@ -206,9 +206,9 @@ class MyStrategy:
             if attack_distance < distance:
                 continue
             print("Attacker: ", attacker)
-            if (closest_attacker is None) or attack_distance < closest_attacker_distance:
+            if (closest_attacker is None) or attacker.life < closest_attacker_life:
                 closest_attacker = attacker
-                closest_attacker_distance = attack_distance
+                closest_attacker_life = attacker.life
         return closest_attacker
 
     def enemy_units(self):
