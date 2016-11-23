@@ -260,7 +260,7 @@ class MyStrategy:
                 Point2D(800.0, 200.0),
                 Point2D(map_size * 0.25, 200.0),
                 Point2D(map_size * 0.50, 200.0),
-                Point2D(map_size * 0.65, 200.0),
+                Point2D(map_size * 0.70, 200.0),
                 # Point2D(map_size * 0.75, 200.0),
                 # Point2D(map_size - 800.0, 200.0)
             ],
@@ -273,7 +273,7 @@ class MyStrategy:
                 Point2D(map_size - 200.0, map_size - 800.0),
                 Point2D(map_size - 200.0, map_size * 0.75),
                 Point2D(map_size - 200.0, map_size * 0.50),
-                Point2D(map_size - 200.0, map_size * 0.35),
+                Point2D(map_size - 200.0, map_size * 0.30),
                 # Point2D(map_size - 200.0, map_size * 0.25),
                 # Point2D(map_size - 200.0, 600.0)
             ]
@@ -446,7 +446,8 @@ class MyStrategy:
 
     def find_closest_bonus(self):
         bonus_ticks = self.game.bonus_appearance_interval_ticks
-        ticks = self.tick % (2 * bonus_ticks)
+        # ticks = self.tick % (2 * bonus_ticks)
+        ticks = self.tick
         if bonus_ticks * 4 / 5 < ticks < bonus_ticks:
             if self.lane == LaneType.TOP:
                 bonus_pos = self.game.map_size * 0.3
@@ -462,6 +463,8 @@ class MyStrategy:
         closest_bonus_distance = None
         for bonus in self.world.bonuses:
             bonus_distance = self.me.get_distance_to_unit(bonus)
+            if bonus_distance > self.me.vision_range:
+                continue
             if (closest_bonus_distance is None) or (closest_bonus_distance > bonus_distance):
                 closest_bonus_distance = bonus_distance
                 closest_bonus = bonus
