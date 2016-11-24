@@ -114,11 +114,17 @@ class MyStrategy:
         if angle_criteria1 > angle_criteria2:
             return target2
 
-        if angle_criteria1 and angle_criteria2:
-            if target1.life < target2.life:
-                return target1
-            if target2.life < target1.life:
-                return target2
+        if target1.life < target2.life:
+            return target1
+        if target2.life < target1.life:
+            return target2
+
+        ticks_to_turn1 = int(abs(self.me.get_angle_to_unit(target1)) / self.game.wizard_max_turn_angle)
+        ticks_to_turn2 = int(abs(self.me.get_angle_to_unit(target2)) / self.game.wizard_max_turn_angle)
+        if ticks_to_turn1 < ticks_to_turn2:
+            return target1
+        elif ticks_to_turn1 > ticks_to_turn2:
+            return target2
 
         distance1 = self.me.get_distance_to_unit(target1) - target1.radius * 0.6
         distance2 = self.me.get_distance_to_unit(target2) - target2.radius * 0.6
@@ -195,10 +201,40 @@ class MyStrategy:
         print("vanguard: %f %f" % (vanguard.x, vanguard.y), vanguard)
         return vanguard
 
+    def aims_me(self, enemy):
+        distance = self.me.get_distance_to_unit(enemy) - self.me.radius
+        if distance > self.get_attack_distance(enemy):
+            return False
+        if enemy.remaining_action_cooldown_ticks > 5:
+            return False
+        if type(enemy) is not Wizard:
+            for ally in self.allies():
+                distance_to_ally = enemy.get_distance_to_unit(enemy) - ally.radius
+                if distance_to_ally < distance:
+                    return False
+        return True
+
     def get_closest_attacker(self):
+        closest_orc = self.get_closest_orc_attacker()
+        if closest_orc is not None:
+            return closest_orc
+        closest_attacker = None
+        closest_attacker_distance = None
+        for enemy in self.enemy_units():
+            if not self.aims_me(enemy):
+                continue
+            attacker_distance = self.me.get_distance_to_unit(enemy)
+            if (closest_attacker_distance is None) or (closest_attacker_distance > attacker_distance):
+                closest_attacker = enemy
+                closest_attacker_distance = attacker_distance
+        return closest_attacker
+
+    def get_closest_orc_attacker(self):
         closest_attacker = None
         closest_attacker_life = None
         for attacker in self.world.minions:
+            if attacker.faction in [self.me.faction, Faction.NEUTRAL]:
+                continue
             if attacker.type != MinionType.ORC_WOODCUTTER:
                 continue
             distance = self.me.get_distance_to_unit(attacker) - self.me.radius
