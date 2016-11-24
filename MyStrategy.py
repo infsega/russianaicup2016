@@ -106,8 +106,8 @@ class MyStrategy:
         if priority2 > priority1:
             return target2
 
-        angle_criteria1 = self.is_attack_angle(target1)
-        angle_criteria2 = self.is_attack_angle(target2)
+        angle_criteria1 = self.is_current_attack_angle(target1)
+        angle_criteria2 = self.is_current_attack_angle(target2)
 
         if angle_criteria1 < angle_criteria2:
             return target1
@@ -384,7 +384,7 @@ class MyStrategy:
                 distance_to_closest_obstacle = distance_to_obstacle
         return closest_obstacle
 
-    def is_attack_angle(self, target):
+    def is_attack_angle(self, target, shell_radius):
         angle = abs(self.me.get_angle_to_unit(target))
         if angle < self.game.staff_sector / 2.0:
             return True
@@ -395,8 +395,8 @@ class MyStrategy:
         dx = target.x - self.me.x
         dy = target.y - self.me.y
         distance = math.hypot(dx, dy)
-        dx *= (target.radius / distance)
-        dy *= (target.radius / distance)
+        dx *= (shell_radius / distance)
+        dy *= (shell_radius / distance)
 
         angle1 = self.me.get_angle_to(target.x - dy, target.y + dx)
         angle2 = self.me.get_angle_to(target.x + dy, target.y - dx)
@@ -405,28 +405,37 @@ class MyStrategy:
         attack_sector = -self.game.staff_sector / 2.0, +self.game.staff_sector / 2.0
         return sectors_intersects(target_sector, attack_sector)
 
+    def is_current_attack_angle(self, target):
+        angle = self.me.get_angle_to_unit(target)
+        missile_time1 = self.me.remaining_cooldown_ticks_by_action[ActionType.MAGIC_MISSILE]
+        staff_time2 = self.me.remaining_cooldown_ticks_by_action[ActionType.STAFF]
+
+        if  missile_time1 <= staff_time2:
+            return self.is_attack_angle(target, self.game.magic_missile_radius)
+        else:
+            return -self.game.staff_sector / 2.0 < angle < +self.game.staff_sector / 2.0
+
     def setup_attack(self, target):
         angle = self.me.get_angle_to_unit(target)
         self.current_move.turn = angle
         self.current_move.strafe_speed = 0
 
-        if not self.is_attack_angle(target):
-            return True
-
         if self.me.remaining_action_cooldown_ticks > 0:
-            return False
+            return
 
         distance = self.me.get_distance_to_unit(target)
         if distance < self.game.staff_range + target.radius:
             if self.me.remaining_cooldown_ticks_by_action[ActionType.STAFF] == 0:
-                self.current_move.action = ActionType.STAFF
-                print("STAFF ATTACK")
+                if -self.game.staff_sector / 2.0 < angle < +self.game.staff_sector / 2.0:
+                    print("STAFF ATTACK")
+                    self.current_move.action = ActionType.STAFF
         if distance < self.me.cast_range + target.radius:
             if self.me.remaining_cooldown_ticks_by_action[ActionType.MAGIC_MISSILE] == 0:
-                print("MISSILE")
-                self.current_move.cast_angle = angle
-                self.current_move.min_cast_distance = distance - target.radius + self.game.magic_missile_radius
-                self.current_move.action = ActionType.MAGIC_MISSILE
+                if self.is_attack_angle(target, self.game.magic_missile_radius):
+                    print("MISSILE")
+                    self.current_move.cast_angle = angle
+                    self.current_move.min_cast_distance = distance - target.radius + self.game.magic_missile_radius
+                    self.current_move.action = ActionType.MAGIC_MISSILE
 
     def go_to_waypoint(self, waypoint):
         can_move = True
