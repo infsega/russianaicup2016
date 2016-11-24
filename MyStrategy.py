@@ -45,13 +45,13 @@ def sectors_intersects(sector1, sector2):
 def target_priority(target):
     if target is None:
         return 0
+    if type(target) is Building:
+        return 1
     if type(target) is Minion:
         if target.type == MinionType.ORC_WOODCUTTER:
-            return 2
+            return 3
         else:
-            return 1
-    if type(target) is Building:
-        return 3
+            return 2
     return 4
 
 
@@ -99,6 +99,19 @@ class MyStrategy:
         self.current_move = move
 
     def select_target(self, target1: LivingUnit, target2: LivingUnit):
+        if target1 is None:
+            return target2
+        if target2 is None:
+            return target1
+
+        turns_to_kill1 = math.ceil(target1.life / self.game.magic_missile_direct_damage)
+        turns_to_kill2 = math.ceil(target2.life / self.game.magic_missile_direct_damage)
+
+        if turns_to_kill1 < 3 <= turns_to_kill2:
+            return target1
+        if turns_to_kill2 < 3 <= turns_to_kill1:
+            return target2
+
         priority1 = target_priority(target1)
         priority2 = target_priority(target2)
         if priority1 > priority2:
@@ -119,8 +132,8 @@ class MyStrategy:
         if target2.life < target1.life:
             return target2
 
-        ticks_to_turn1 = int(abs(self.me.get_angle_to_unit(target1)) / self.game.wizard_max_turn_angle)
-        ticks_to_turn2 = int(abs(self.me.get_angle_to_unit(target2)) / self.game.wizard_max_turn_angle)
+        ticks_to_turn1 = math.ceil(abs(self.me.get_angle_to_unit(target1)) / self.game.wizard_max_turn_angle)
+        ticks_to_turn2 = math.ceil(abs(self.me.get_angle_to_unit(target2)) / self.game.wizard_max_turn_angle)
         if ticks_to_turn1 < ticks_to_turn2:
             return target1
         elif ticks_to_turn1 > ticks_to_turn2:
@@ -297,7 +310,7 @@ class MyStrategy:
                 Point2D(800.0, 200.0),
                 Point2D(map_size * 0.25, 200.0),
                 Point2D(map_size * 0.50, 200.0),
-                Point2D(map_size * 0.70, 200.0),
+                Point2D(map_size * 0.725, 100.0),
                 # Point2D(map_size * 0.75, 200.0),
                 # Point2D(map_size - 800.0, 200.0)
             ],
@@ -310,7 +323,7 @@ class MyStrategy:
                 Point2D(map_size - 200.0, map_size - 800.0),
                 Point2D(map_size - 200.0, map_size * 0.75),
                 Point2D(map_size - 200.0, map_size * 0.50),
-                Point2D(map_size - 200.0, map_size * 0.30),
+                Point2D(map_size - 100.0, map_size * 0.275),
                 # Point2D(map_size - 200.0, map_size * 0.25),
                 # Point2D(map_size - 200.0, 600.0)
             ]
@@ -405,13 +418,21 @@ class MyStrategy:
         attack_sector = -self.game.staff_sector / 2.0, +self.game.staff_sector / 2.0
         return sectors_intersects(target_sector, attack_sector)
 
+    def acceptable_magic_missile_mismatch(self, target):
+        attack_radius = self.game.magic_missile_radius
+        ticks_to_achieve = math.ceil(self.me.get_distance_to_unit(target) / self.game.magic_missile_speed)
+        if ticks_to_achieve > 6:
+            attack_radius *= 1.5
+        return attack_radius
+
     def is_current_attack_angle(self, target):
         angle = self.me.get_angle_to_unit(target)
         missile_time1 = self.me.remaining_cooldown_ticks_by_action[ActionType.MAGIC_MISSILE]
         staff_time2 = self.me.remaining_cooldown_ticks_by_action[ActionType.STAFF]
 
         if  missile_time1 <= staff_time2:
-            return self.is_attack_angle(target, self.game.magic_missile_radius)
+            attack_radius = self.acceptable_magic_missile_mismatch(target)
+            return self.is_attack_angle(target, attack_radius)
         else:
             return -self.game.staff_sector / 2.0 < angle < +self.game.staff_sector / 2.0
 
@@ -431,7 +452,8 @@ class MyStrategy:
                     self.current_move.action = ActionType.STAFF
         if distance < self.me.cast_range + target.radius:
             if self.me.remaining_cooldown_ticks_by_action[ActionType.MAGIC_MISSILE] == 0:
-                if self.is_attack_angle(target, self.game.magic_missile_radius):
+                attack_radius = self.acceptable_magic_missile_mismatch(target)
+                if self.is_attack_angle(target, attack_radius):
                     print("MISSILE")
                     self.current_move.cast_angle = angle
                     self.current_move.min_cast_distance = distance - target.radius + self.game.magic_missile_radius
@@ -459,11 +481,13 @@ class MyStrategy:
         obstacle = self.get_closest_obstacle()
         if obstacle is not None:
             self.setup_attack(obstacle)
+            self.current_move.speed = self.game.wizard_forward_speed
             return True
 
         if not can_move:
             return False
         self.current_move.speed = self.game.wizard_forward_speed
+        self.current_move.strafe_speed = 0
         return True
 
     def visible_by_enemy(self):
