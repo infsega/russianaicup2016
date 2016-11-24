@@ -249,7 +249,7 @@ class MyStrategy:
                 Point2D(100.0, map_size - 100.0),
                 random.choice([Point2D(600.0, map_size - 200.0), Point2D(200.0, map_size - 600.0)]),
                 Point2D(800.0, map_size - 800.0),
-                Point2D(map_size - 1200.0, 1200.0)
+                Point2D(map_size - 1000.0, 1000.0)
             ],
             LaneType.TOP: [
                 Point2D(50.0, map_size - 800.0),
