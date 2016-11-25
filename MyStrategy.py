@@ -605,6 +605,9 @@ class MyStrategy:
         move_forward = True
 
         if me.life < me.max_life * LOW_HP_FACTOR:
+            nearest_target = self.get_nearest_target()
+            if nearest_target is not None:
+                self.setup_attack(nearest_target)
             if self.retreat():
                 print(self.world.tick_index, "Medic!")
                 return
