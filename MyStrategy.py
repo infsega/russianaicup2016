@@ -11,6 +11,10 @@ from model.BuildingType import BuildingType
 from model.Minion import Minion
 from model.MinionType import MinionType
 from model.Message import Message
+from model.Projectile import Projectile
+from model.ProjectileType import ProjectileType
+from model.Tree import Tree
+from model.Unit import Unit
 
 import math
 import random
@@ -54,6 +58,30 @@ def target_priority(target):
             return 2
     return 4
 
+unit_class = {
+    Minion: {
+        MinionType.ORC_WOODCUTTER: "Orc",
+        MinionType.FETISH_BLOWDART: "Fetish"
+    },
+    Building: {
+        BuildingType.FACTION_BASE: "Base",
+        BuildingType.GUARDIAN_TOWER: "Tower"
+    },
+    Projectile: {
+        ProjectileType.MAGIC_MISSILE: "Missile",
+        ProjectileType.FROST_BOLT: "Frost",
+        ProjectileType.FIREBALL: "Fireball",
+        ProjectileType.DART: "Dart"
+    }
+}
+
+def unit_class_str(unit):
+    if type(unit) is Wizard:
+        return "Wizard"
+    if type(unit) is Tree:
+        return "Tree"
+    return unit_class[type(unit)][unit.type]
+
 
 class Point2D:
     def __init__(self, x, y):
@@ -81,6 +109,20 @@ class MyStrategy:
         self.strafe_line = 0
         self.strafe_dir = -1
         self.last_waypoint = None
+        self.angry_neutrals = set()
+
+    def unit_faction_str(self, unit: Unit):
+        if unit.faction == self.me.faction:
+            return "friend"
+        elif unit.faction == Faction.NEUTRAL:
+            return "neutral"
+        elif unit.faction == Faction.OTHER:
+            return "other"
+        else:
+            return "enemy"
+
+    def unit_to_str(self, unit):
+        return "%s[%s](%0.1f, %0.1f)" % (unit_class_str(unit), self.unit_faction_str(unit), unit.x, unit.y)
 
     def setup_strafe(self):
         if self.strafe_line == 0:
@@ -211,7 +253,7 @@ class MyStrategy:
             if distance > vanguard_distance:
                 vanguard = ally
                 vanguard_distance = distance
-        print("vanguard: %f %f" % (vanguard.x, vanguard.y), vanguard)
+        print(self.world.tick_index, "vanguard: %s" % self.unit_to_str(vanguard))
         return vanguard
 
     def aims_me(self, enemy):
@@ -242,11 +284,25 @@ class MyStrategy:
                 closest_attacker_distance = attacker_distance
         return closest_attacker
 
+    def is_enemy(self, unit):
+        if unit.faction == self.me.faction:
+            return False
+        if unit.faction == Faction.NEUTRAL:
+            if unit.id in self.angry_neutrals:
+                return True
+            if type(unit) is not Minion:
+                return False
+            is_angry = (unit.life < unit.max_life) or (unit.remaining_action_cooldown_ticks > 0)
+            if is_angry:
+                self.angry_neutrals.add(unit.id)
+            return is_angry
+        return True
+
     def get_closest_orc_attacker(self):
         closest_attacker = None
         closest_attacker_life = None
         for attacker in self.world.minions:
-            if attacker.faction in [self.me.faction, Faction.NEUTRAL]:
+            if not self.is_enemy(attacker):
                 continue
             if attacker.type != MinionType.ORC_WOODCUTTER:
                 continue
@@ -254,7 +310,7 @@ class MyStrategy:
             attack_distance = self.get_attack_distance(attacker)
             if attack_distance < distance:
                 continue
-            print("Attacker: ", attacker)
+            print(self.world.tick_index, "Attacker: ", attacker)
             if (closest_attacker is None) or attacker.life < closest_attacker_life:
                 closest_attacker = attacker
                 closest_attacker_life = attacker.life
@@ -262,7 +318,7 @@ class MyStrategy:
 
     def enemy_units(self):
         targets = self.world.buildings + self.world.wizards + self.world.minions
-        return [unit for unit in targets if unit.faction not in [Faction.NEUTRAL, self.me.faction]]
+        return [unit for unit in targets if self.is_enemy(unit)]
 
     def allies(self):
         units = self.world.buildings + self.world.wizards + self.world.minions
@@ -367,7 +423,7 @@ class MyStrategy:
             elif unit.type == MinionType.FETISH_BLOWDART:
                 return self.game.fetish_blowdart_attack_range
         else:
-            print("Unknown enemy", unit)
+            print(self.world.tick_index, "Unknown enemy", unit)
             return 0
 
     def go_to_next_waypoint(self):
@@ -378,12 +434,15 @@ class MyStrategy:
             return
         if next_waypoint != self.last_waypoint:
             self.last_waypoint = next_waypoint
-            print("Go to next waypoint")
+            print(self.world.tick_index, "Go to next waypoint")
         self.go_to_waypoint(next_waypoint)
 
-    def get_closest_obstacle(self):
-        dx = math.cos(self.me.angle) * self.game.staff_range
-        dy = math.sin(self.me.angle) * self.game.staff_range
+    def get_closest_obstacle(self, waypoint):
+        dx = waypoint.x - self.me.x
+        dy = waypoint.y - self.me.y
+        l = math.hypot(dx, dy)
+        dx *= (self.game.staff_range * 0.9 / l)
+        dy *= (self.game.staff_range * 0.9 / l)
         src = Point2D(self.me.x, self.me.y)
         dst = Point2D(self.me.x + dx, self.me.y + dy)
         closest_obstacle = None
@@ -448,13 +507,13 @@ class MyStrategy:
         if distance < self.game.staff_range + target.radius:
             if self.me.remaining_cooldown_ticks_by_action[ActionType.STAFF] == 0:
                 if -self.game.staff_sector / 2.0 < angle < +self.game.staff_sector / 2.0:
-                    print("STAFF ATTACK")
+                    print(self.world.tick_index, "STAFF ATTACK")
                     self.current_move.action = ActionType.STAFF
         if distance < self.me.cast_range + target.radius:
             if self.me.remaining_cooldown_ticks_by_action[ActionType.MAGIC_MISSILE] == 0:
                 attack_radius = self.acceptable_magic_missile_mismatch(target)
                 if self.is_attack_angle(target, attack_radius):
-                    print("MISSILE")
+                    print(self.world.tick_index, "MISSILE")
                     self.current_move.cast_angle = angle
                     self.current_move.min_cast_distance = distance - target.radius + self.game.magic_missile_radius
                     self.current_move.action = ActionType.MAGIC_MISSILE
@@ -469,7 +528,7 @@ class MyStrategy:
             if unit.id == self.me.id:
                 continue
             if distance_to_segment(unit, self.me, dst) < self.me.radius + unit.radius:
-                print("Cannot move")
+                print(self.world.tick_index, "Cannot move")
                 can_move = False
                 break
         angle = self.me.get_angle_to(waypoint.x, waypoint.y)
@@ -478,8 +537,9 @@ class MyStrategy:
         if abs(angle) > self.game.staff_sector / 4.0:
             return True
 
-        obstacle = self.get_closest_obstacle()
+        obstacle = self.get_closest_obstacle(waypoint)
         if obstacle is not None:
+            print(self.world.tick_index, "Obstacle: %s" % self.unit_to_str(obstacle))
             self.setup_attack(obstacle)
             self.current_move.speed = self.game.wizard_forward_speed
             return True
@@ -489,9 +549,6 @@ class MyStrategy:
         self.current_move.speed = self.game.wizard_forward_speed
         self.current_move.strafe_speed = 0
         return True
-
-    def visible_by_enemy(self):
-        return any(self.me.get_distance_to_unit(unit) < unit.vision_range for unit in self.enemy_units())
 
     def retreat(self):
         previous_waypoint = self.get_previous_waypoint()
@@ -549,9 +606,9 @@ class MyStrategy:
 
         if me.life < me.max_life * LOW_HP_FACTOR:
             if self.retreat():
-                print("Medic!")
+                print(self.world.tick_index, "Medic!")
                 return
-            print("Medic needed, but no chance to retreat")
+            print(self.world.tick_index, "Medic needed, but no chance to retreat")
             move_forward = False
         else:
             bonus = self.find_closest_bonus()
@@ -562,7 +619,7 @@ class MyStrategy:
         vanguard = self.get_vanguard()
         if vanguard is not None:
             if self.get_unit_lane(self.me) != self.lane:
-                print("Out of lane, go to vanguard")
+                print(self.world.tick_index, "Out of lane, go to vanguard")
                 self.go_to_waypoint(vanguard)
                 move_forward = False
             else:
@@ -573,25 +630,25 @@ class MyStrategy:
                         self.go_to_waypoint(vanguard)
                     else:
                         if self.retreat():
-                            print("There is no vanguard. Retreat.")
+                            print(self.world.tick_index, "There is no vanguard. Retreat.")
                         else:
-                            print("There is no vanguard. Cannot retreat")
+                            print(self.world.tick_index, "There is no vanguard. Cannot retreat")
                     move_forward = False
 
         if self.get_closest_attacker() is not None:
             if self.retreat():
-                print("Under attack! Retreat")
+                print(self.world.tick_index, "Under attack! Retreat")
             else:
-                print("Under attack! Failed to retreat")
+                print(self.world.tick_index, "Under attack! Failed to retreat")
         else:
-            print("There is no attacker")
+            print(self.world.tick_index, "There is no attacker")
 
         nearest_target = self.get_nearest_target()
         if nearest_target is not None:
             self.setup_attack(nearest_target)
             return
 
-        print("No target to attack")
+        print(self.world.tick_index, "No target to attack")
 
         if move_forward:
             self.go_to_next_waypoint()
