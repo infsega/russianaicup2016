@@ -75,6 +75,7 @@ unit_class = {
     }
 }
 
+
 def unit_class_str(unit):
     if type(unit) is Wizard:
         return "Wizard"
@@ -124,12 +125,31 @@ class MyStrategy:
     def unit_to_str(self, unit):
         return "%s[%s](%0.1f, %0.1f)" % (unit_class_str(unit), self.unit_faction_str(unit), unit.x, unit.y)
 
+    def can_strafe(self, strafe_direction):
+        distance_to_check = self.me.radius * 0.1
+        x = self.me.x + math.cos(self.me.angle + strafe_direction * math.pi / 2) * distance_to_check
+        if not (self.me.radius < x < self.game.map_size - self.me.radius):
+            print(self.world.tick_index, "X bump")
+            return False
+        y = self.me.y + math.sin(self.me.angle + strafe_direction * math.pi / 2) * distance_to_check
+        if not (self.me.radius < y < self.game.map_size - self.me.radius):
+            print(self.world.tick_index, "Y bump")
+            return False
+
+        for unit in self.world.buildings + self.world.trees + self.world.minions + self.world.wizards:
+            if unit.id == self.me.id:
+                continue
+            if unit.get_distance_to(x, y) <= unit.radius + self.me.radius:
+                print(self.world.tick_index, "Bump with %s" % self.unit_to_str(unit))
+                return False
+
+        return True
+
     def setup_strafe(self):
-        if self.strafe_line == 0:
-            self.strafe_line = random.randint(20, 40)
+        if self.strafe_line == 0 or not self.can_strafe(self.strafe_dir):
             self.strafe_dir = -self.strafe_dir
-        strafe_speed = random.uniform(self.game.wizard_strafe_speed / 2.0, self.game.wizard_strafe_speed)
-        self.current_move.strafe_speed = self.strafe_dir * strafe_speed
+            self.strafe_line = 60
+        self.current_move.strafe_speed = self.strafe_dir * self.game.wizard_strafe_speed
         self.strafe_line -= 1
 
     def initialize_tick(self, me: Wizard, world: World, game: Game, move: Move):
@@ -262,11 +282,11 @@ class MyStrategy:
             return False
         if enemy.remaining_action_cooldown_ticks > 5:
             return False
-        if type(enemy) is not Wizard:
-            for ally in self.allies():
-                distance_to_ally = enemy.get_distance_to_unit(enemy) - ally.radius
-                if distance_to_ally < distance:
-                    return False
+        # if type(enemy) is not Wizard:
+        #    for ally in self.allies():
+        #        distance_to_ally = enemy.get_distance_to_unit(enemy) - ally.radius
+        #        if distance_to_ally < distance:
+        #            return False
         return True
 
     def get_closest_attacker(self):
@@ -310,7 +330,7 @@ class MyStrategy:
             attack_distance = self.get_attack_distance(attacker)
             if attack_distance < distance:
                 continue
-            print(self.world.tick_index, "Attacker: ", attacker)
+            print(self.world.tick_index, "Attacker: %s", self.unit_to_str(attacker))
             if (closest_attacker is None) or attacker.life < closest_attacker_life:
                 closest_attacker = attacker
                 closest_attacker_life = attacker.life
@@ -437,19 +457,33 @@ class MyStrategy:
             print(self.world.tick_index, "Go to next waypoint")
         self.go_to_waypoint(next_waypoint)
 
-    def get_closest_obstacle(self, waypoint):
+    def get_next_point(self):
+        dx = math.cos(self.me.angle)
+        dy = math.sin(self.me.angle)
+        dx *= (self.game.staff_range * 0.5)
+        dy *= (self.game.staff_range * 0.5)
+        return Point2D(self.me.x + dx, self.me.y + dy)
+
+    def get_sub_waypoint(self, waypoint):
         dx = waypoint.x - self.me.x
         dy = waypoint.y - self.me.y
         l = math.hypot(dx, dy)
-        dx *= (self.game.staff_range * 0.9 / l)
-        dy *= (self.game.staff_range * 0.9 / l)
+        dx *= (self.game.staff_range * 0.5 / l)
+        dy *= (self.game.staff_range * 0.5 / l)
+        return Point2D(self.me.x + dx, self.me.y + dy)
+
+    def get_closest_obstacle(self, waypoint):
         src = Point2D(self.me.x, self.me.y)
-        dst = Point2D(self.me.x + dx, self.me.y + dy)
+        dst1 = self.get_next_point()
+        dst2 = self.get_sub_waypoint(waypoint)
         closest_obstacle = None
         distance_to_closest_obstacle = None
         for obstacle in self.world.trees + self.enemy_units():
-            if distance_to_segment(obstacle, src, dst) > self.me.radius + obstacle.radius:
-                continue
+            distance1 = distance_to_segment(obstacle, src, dst1)
+            if distance1 > self.me.radius + obstacle.radius:
+                distance2 = distance_to_segment(obstacle, src, dst2)
+                if distance2 > self.me.radius + obstacle.radius:
+                    continue
             distance_to_obstacle = self.me.get_distance_to_unit(obstacle)
             if (distance_to_closest_obstacle is None) or (distance_to_obstacle < distance_to_closest_obstacle):
                 closest_obstacle = obstacle
@@ -498,7 +532,6 @@ class MyStrategy:
     def setup_attack(self, target):
         angle = self.me.get_angle_to_unit(target)
         self.current_move.turn = angle
-        self.current_move.strafe_speed = 0
 
         if self.me.remaining_action_cooldown_ticks > 0:
             return
@@ -542,6 +575,8 @@ class MyStrategy:
             print(self.world.tick_index, "Obstacle: %s" % self.unit_to_str(obstacle))
             self.setup_attack(obstacle)
             self.current_move.speed = self.game.wizard_forward_speed
+            self.current_move.strafe_speed = 0
+            print(self.world.tick_index, "Removing the obstacle, reset strafe")
             return True
 
         if not can_move:
@@ -597,6 +632,62 @@ class MyStrategy:
                 closest_bonus = bonus
         return closest_bonus
 
+    def get_straying_enemy(self):
+        closest_straying_enemy = None
+        closest_straying_enemy_distance = None
+        for enemy in self.enemy_units():
+            distance = self.me.get_distance_to_unit(enemy)
+            if distance > self.me.vision_range:
+                continue
+            if type(enemy) in [Minion, Building]:
+                return None
+            if (closest_straying_enemy is None) or (closest_straying_enemy_distance > distance):
+                closest_straying_enemy_distance = distance
+                closest_straying_enemy = enemy
+        return closest_straying_enemy
+
+    def get_wound_enemy(self):
+        closest_wound_enemy = None
+        closest_wound_enemy_distance = None
+        for wizard in self.world.wizards:
+            if wizard.faction == self.me.faction:
+                continue
+            distance = self.me.get_distance_to_unit(wizard)
+            if distance > self.me.vision_range:
+                continue
+            if wizard.life >= self.me.max_life * LOW_HP_FACTOR:
+                continue
+            if (closest_wound_enemy is None) or (closest_wound_enemy_distance > distance):
+                closest_wound_enemy_distance = distance
+                closest_wound_enemy = wizard
+        return closest_wound_enemy
+
+    def is_free_way(self, waypoint):
+        distance_to_check = self.me.radius * 0.5
+        dst = Point2D(
+            self.me.x + math.cos(self.me.angle) * distance_to_check,
+            self.me.y + math.sin(self.me.angle) * distance_to_check)
+        for unit in self.world.buildings + self.world.wizards + self.world.minions + self.world.trees:
+            if unit.id == self.me.id:
+                continue
+            if distance_to_segment(unit, self.me, dst) < self.me.radius + unit.radius:
+                print(self.world.tick_index, "Freeway is blocked by %s" % self.unit_to_str(unit))
+                return False
+        return True
+
+    def run_for_wound_enemy(self):
+        wound_enemy = self.get_wound_enemy()
+        if wound_enemy is None:
+            return False
+        print(self.world.tick_index, "Run for wound %s" % self.unit_to_str(wound_enemy))
+        if not self.is_free_way(wound_enemy):
+            return False
+        angle = self.me.get_angle_to_unit(wound_enemy)
+        self.current_move.turn = angle
+        self.current_move.speed = self.game.wizard_forward_speed
+        self.current_move.strafe_speed = 0
+        return False
+
     def move(self, me: Wizard, world: World, game: Game, move: Move):
         self.initialize_tick(me, world, game, move)
 
@@ -613,6 +704,8 @@ class MyStrategy:
                 return
             print(self.world.tick_index, "Medic needed, but no chance to retreat")
             move_forward = False
+        elif self.run_for_wound_enemy():
+            return
         else:
             bonus = self.find_closest_bonus()
             if bonus is not None:
@@ -628,6 +721,11 @@ class MyStrategy:
             else:
                 vanguard_distance = self.get_unit_distance_on_lane(self.lane, vanguard)
                 my_distance = self.get_unit_distance_on_lane(self.lane, self.me)
+                straying_enemy = self.get_straying_enemy()
+                if move_forward and straying_enemy is not None:
+                    self.go_to_waypoint(straying_enemy)
+                    self.setup_attack(straying_enemy)
+                    move_forward = False
                 if my_distance + 100 > vanguard_distance:
                     if my_distance > vanguard_distance + 100:
                         self.go_to_waypoint(vanguard)
@@ -643,6 +741,7 @@ class MyStrategy:
                 print(self.world.tick_index, "Under attack! Retreat")
             else:
                 print(self.world.tick_index, "Under attack! Failed to retreat")
+            move_forward = False
         else:
             print(self.world.tick_index, "There is no attacker")
 
