@@ -111,6 +111,7 @@ class MyStrategy:
         self.strafe_dir = -1
         self.last_waypoint = None
         self.angry_neutrals = set()
+        self.last_tree = None
 
     def unit_faction_str(self, unit: Unit):
         if unit.faction == self.me.faction:
@@ -330,7 +331,7 @@ class MyStrategy:
             attack_distance = self.get_attack_distance(attacker)
             if attack_distance < distance:
                 continue
-            print(self.world.tick_index, "Attacker: %s", self.unit_to_str(attacker))
+            print(self.world.tick_index, "Attacker: %s" % self.unit_to_str(attacker))
             if (closest_attacker is None) or attacker.life < closest_attacker_life:
                 closest_attacker = attacker
                 closest_attacker_life = attacker.life
@@ -574,9 +575,9 @@ class MyStrategy:
         if obstacle is not None:
             print(self.world.tick_index, "Obstacle: %s" % self.unit_to_str(obstacle))
             self.setup_attack(obstacle)
+            self.last_tree = obstacle.id
             self.current_move.speed = self.game.wizard_forward_speed
             self.current_move.strafe_speed = 0
-            print(self.world.tick_index, "Removing the obstacle, reset strafe")
             return True
 
         if not can_move:
@@ -607,18 +608,25 @@ class MyStrategy:
         self.current_move.speed = -self.game.wizard_backward_speed
         return True
 
+    def pick_bonus_respawn(self):
+        bonus_pos1 = self.game.map_size * 0.3
+        bonus_pos2 = self.game.map_size * 0.7
+        bonus1 = Point2D(bonus_pos1, bonus_pos1)
+        bonus2 = Point2D(bonus_pos2, bonus_pos2)
+        if self.me.get_distance_to_unit(bonus1) <= self.me.get_distance_to_unit(bonus2):
+            return bonus1
+        else:
+            return bonus2
+
     def find_closest_bonus(self):
         bonus_ticks = self.game.bonus_appearance_interval_ticks
-        ticks = self.world.tick_index
+        ticks = (self.world.tick_index % bonus_ticks)
         if bonus_ticks * 7 / 8 < ticks < bonus_ticks:
-            if self.lane == LaneType.TOP:
-                bonus_pos = self.game.map_size * 0.3
-            elif self.lane == LaneType.MIDDLE:
-                bonus_pos = self.game.map_size * 0.3
-            else:
-                bonus_pos = self.game.map_size * 0.7
-            bonus = Point2D(bonus_pos, bonus_pos)
-            if self.me.get_distance_to_unit(bonus) < self.me.vision_range * 0.7:
+            bonus = self.pick_bonus_respawn()
+            distance_to_bonus = self.me.get_distance_to_unit(bonus)
+            if distance_to_bonus < self.me.vision_range * 0.7:
+                return None
+            if (ticks > bonus_ticks) and (distance_to_bonus > 1200):
                 return None
             return bonus
         closest_bonus = None
@@ -662,13 +670,13 @@ class MyStrategy:
                 closest_wound_enemy = wizard
         return closest_wound_enemy
 
-    def is_free_way(self, waypoint):
+    def is_free_way(self, target):
         distance_to_check = self.me.radius * 0.5
         dst = Point2D(
             self.me.x + math.cos(self.me.angle) * distance_to_check,
             self.me.y + math.sin(self.me.angle) * distance_to_check)
         for unit in self.world.buildings + self.world.wizards + self.world.minions + self.world.trees:
-            if unit.id == self.me.id:
+            if unit.id in [self.me.id, target.id]:
                 continue
             if distance_to_segment(unit, self.me, dst) < self.me.radius + unit.radius:
                 print(self.world.tick_index, "Freeway is blocked by %s" % self.unit_to_str(unit))
@@ -682,14 +690,24 @@ class MyStrategy:
         print(self.world.tick_index, "Run for wound %s" % self.unit_to_str(wound_enemy))
         if not self.is_free_way(wound_enemy):
             return False
+        if self.me.get_distance_to_unit(wound_enemy) < self.me.cast_range * 0.9:
+            print(self.world.tick_index, "Ready to shoot")
         angle = self.me.get_angle_to_unit(wound_enemy)
         self.current_move.turn = angle
         self.current_move.speed = self.game.wizard_forward_speed
         self.current_move.strafe_speed = 0
-        return False
+        return True
 
     def move(self, me: Wizard, world: World, game: Game, move: Move):
         self.initialize_tick(me, world, game, move)
+
+        if self.last_tree is not None:
+            obstacle = next((tree for tree in self.world.trees if tree.id == self.last_tree), None)
+            if obstacle is not None:
+                print(self.world.tick_index, "Continue removing the obstacle")
+                self.setup_attack(obstacle)
+                return
+            self.last_tree = None
 
         self.setup_strafe()
 
@@ -704,8 +722,8 @@ class MyStrategy:
                 return
             print(self.world.tick_index, "Medic needed, but no chance to retreat")
             move_forward = False
-        elif self.run_for_wound_enemy():
-            return
+        # elif self.run_for_wound_enemy():
+        #     return
         else:
             bonus = self.find_closest_bonus()
             if bonus is not None:
@@ -722,11 +740,11 @@ class MyStrategy:
                 vanguard_distance = self.get_unit_distance_on_lane(self.lane, vanguard)
                 my_distance = self.get_unit_distance_on_lane(self.lane, self.me)
                 straying_enemy = self.get_straying_enemy()
-                if move_forward and straying_enemy is not None:
+                if move_forward and (straying_enemy is not None):
                     self.go_to_waypoint(straying_enemy)
                     self.setup_attack(straying_enemy)
                     move_forward = False
-                if my_distance + 100 > vanguard_distance:
+                elif my_distance + 100 > vanguard_distance:
                     if my_distance > vanguard_distance + 100:
                         self.go_to_waypoint(vanguard)
                     else:
