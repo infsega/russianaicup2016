@@ -15,6 +15,7 @@ from model.Projectile import Projectile
 from model.ProjectileType import ProjectileType
 from model.Tree import Tree
 from model.Unit import Unit
+from model.SkillType import SkillType
 
 import math
 import random
@@ -112,6 +113,35 @@ class MyStrategy:
         self.last_waypoint = None
         self.angry_neutrals = set()
         self.last_tree = None
+        self.last_skill = -1
+        self.last_level = 0
+        self.skills_to_learn = [
+            SkillType.RANGE_BONUS_PASSIVE_1,
+            SkillType.RANGE_BONUS_AURA_1,
+            SkillType.RANGE_BONUS_PASSIVE_2,
+            SkillType.RANGE_BONUS_AURA_2,
+            SkillType.ADVANCED_MAGIC_MISSILE,
+            SkillType.MAGICAL_DAMAGE_BONUS_PASSIVE_1,
+            SkillType.MAGICAL_DAMAGE_BONUS_AURA_1,
+            SkillType.MAGICAL_DAMAGE_BONUS_PASSIVE_2,
+            SkillType.MAGICAL_DAMAGE_BONUS_AURA_2,
+            SkillType.FROST_BOLT,
+            SkillType.STAFF_DAMAGE_BONUS_PASSIVE_1,
+            SkillType.STAFF_DAMAGE_BONUS_AURA_1,
+            SkillType.STAFF_DAMAGE_BONUS_PASSIVE_2,
+            SkillType.STAFF_DAMAGE_BONUS_AURA_2,
+            SkillType.FIREBALL,
+            SkillType.MOVEMENT_BONUS_FACTOR_PASSIVE_1,
+            SkillType.MOVEMENT_BONUS_FACTOR_AURA_1,
+            SkillType.MOVEMENT_BONUS_FACTOR_PASSIVE_2,
+            SkillType.MOVEMENT_BONUS_FACTOR_AURA_2,
+            SkillType.HASTE,
+            SkillType.MAGICAL_DAMAGE_ABSORPTION_PASSIVE_1,
+            SkillType.MAGICAL_DAMAGE_ABSORPTION_AURA_1,
+            SkillType.MAGICAL_DAMAGE_ABSORPTION_PASSIVE_2,
+            SkillType.MAGICAL_DAMAGE_ABSORPTION_AURA_2,
+            SkillType.SHIELD
+        ]
 
     def unit_faction_str(self, unit: Unit):
         if unit.faction == self.me.faction:
@@ -519,12 +549,23 @@ class MyStrategy:
             attack_radius *= 1.5
         return attack_radius
 
+    def acceptable_frost_bolt_mismatch(self, target):
+        attack_radius = self.game.frost_bolt_radius
+        ticks_to_achieve = math.ceil(self.me.get_distance_to_unit(target) / self.game.frost_bolt_speed)
+        if ticks_to_achieve > 6:
+            attack_radius *= 1.5
+        return attack_radius
+
     def is_current_attack_angle(self, target):
         angle = self.me.get_angle_to_unit(target)
-        missile_time1 = self.me.remaining_cooldown_ticks_by_action[ActionType.MAGIC_MISSILE]
-        staff_time2 = self.me.remaining_cooldown_ticks_by_action[ActionType.STAFF]
+        use_magic = True
+        if self.me.level < 5:
+            staff_time = self.me.remaining_cooldown_ticks_by_action[ActionType.STAFF]
+            ranged_time = self.me.remaining_cooldown_ticks_by_action[ActionType.MAGIC_MISSILE]
+            if staff_time < ranged_time:
+                use_magic = False
 
-        if  missile_time1 <= staff_time2:
+        if use_magic:
             attack_radius = self.acceptable_magic_missile_mismatch(target)
             return self.is_attack_angle(target, attack_radius)
         else:
@@ -544,6 +585,7 @@ class MyStrategy:
                     print(self.world.tick_index, "STAFF ATTACK")
                     self.current_move.action = ActionType.STAFF
         if distance < self.me.cast_range + target.radius:
+            print("Remaining time for missile is %d" % self.me.remaining_cooldown_ticks_by_action[ActionType.MAGIC_MISSILE])
             if self.me.remaining_cooldown_ticks_by_action[ActionType.MAGIC_MISSILE] == 0:
                 attack_radius = self.acceptable_magic_missile_mismatch(target)
                 if self.is_attack_angle(target, attack_radius):
@@ -551,6 +593,13 @@ class MyStrategy:
                     self.current_move.cast_angle = angle
                     self.current_move.min_cast_distance = distance - target.radius + self.game.magic_missile_radius
                     self.current_move.action = ActionType.MAGIC_MISSILE
+            if self.me.level >= 10 and self.me.remaining_cooldown_ticks_by_action[ActionType.FROST_BOLT] == 0:
+                attack_radius = self.acceptable_frost_bolt_mismatch(target)
+                if self.is_attack_angle(target, attack_radius):
+                    print(self.world.tick_index, "FROST")
+                    self.current_move.cast_angle = angle
+                    self.current_move.min_cast_distance = distance - target.radius + self.game.frost_bolt_radius
+                    self.current_move.action = ActionType.FROST_BOLT
 
     def go_to_waypoint(self, waypoint):
         can_move = True
@@ -624,7 +673,7 @@ class MyStrategy:
         if bonus_ticks * 7 / 8 < ticks < bonus_ticks:
             bonus = self.pick_bonus_respawn()
             distance_to_bonus = self.me.get_distance_to_unit(bonus)
-            if distance_to_bonus < self.me.vision_range * 0.7:
+            if distance_to_bonus < self.me.vision_range * 0.3:
                 return None
             if (self.world.tick_index > bonus_ticks) and (distance_to_bonus > 1200):
                 return None
@@ -698,8 +747,18 @@ class MyStrategy:
         self.current_move.strafe_speed = 0
         return True
 
+    def setup_skills(self):
+        if self.me.level == self.last_level:
+            return
+        self.current_move.skill_to_learn = self.skills_to_learn[self.last_level]
+        self.last_level += 1
+        print(self.world.tick_index, "LEVEL UP! Level=%d, skill=%d" % (self.me.level, self.current_move.skill_to_learn))
+
     def move(self, me: Wizard, world: World, game: Game, move: Move):
         self.initialize_tick(me, world, game, move)
+
+        if self.game.skills_enabled:
+            self.setup_skills()
 
         if self.last_tree is not None:
             obstacle = next((tree for tree in self.world.trees if tree.id == self.last_tree), None)
@@ -744,7 +803,7 @@ class MyStrategy:
                     self.go_to_waypoint(straying_enemy)
                     self.setup_attack(straying_enemy)
                     move_forward = False
-                elif my_distance + 100 > vanguard_distance:
+                elif my_distance + 30 > vanguard_distance:
                     if my_distance > vanguard_distance + 100:
                         self.go_to_waypoint(vanguard)
                     else:
