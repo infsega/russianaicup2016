@@ -626,7 +626,7 @@ class MyStrategy:
             distance_to_bonus = self.me.get_distance_to_unit(bonus)
             if distance_to_bonus < self.me.vision_range * 0.7:
                 return None
-            if (ticks > bonus_ticks) and (distance_to_bonus > 1200):
+            if (self.world.tick_index > bonus_ticks) and (distance_to_bonus > 1200):
                 return None
             return bonus
         closest_bonus = None
