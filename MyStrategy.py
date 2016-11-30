@@ -16,6 +16,7 @@ from model.ProjectileType import ProjectileType
 from model.Tree import Tree
 from model.Unit import Unit
 from model.SkillType import SkillType
+from model.StatusType import StatusType
 
 import math
 import random
@@ -98,6 +99,20 @@ class Point2D:
         return self.get_distance_to(unit.x, unit.y)
 
 
+def is_frozen(unit: LivingUnit):
+    for status in unit.statuses:
+        if status.type == StatusType.FROZEN:
+            if status.remaining_duration_ticks > 5:
+                return True
+    return False
+
+
+def predict_position(unit: Unit, ticks):
+    return Point2D(
+        unit.x + unit.speed_x * (0.5 * ticks),
+        unit.y + unit.speed_y * (0.5 * ticks))
+
+
 class MyStrategy:
 
     def __init__(self):
@@ -142,6 +157,11 @@ class MyStrategy:
             SkillType.MAGICAL_DAMAGE_ABSORPTION_AURA_2,
             SkillType.SHIELD
         ]
+        self.advanced_missile = False
+        self.has_frost_bolt = False
+        self.has_fireball = False
+        self.has_haste = False
+        self.has_shield = False
 
     def unit_faction_str(self, unit: Unit):
         if unit.faction == self.me.faction:
@@ -196,6 +216,13 @@ class MyStrategy:
             return target2
         if target2 is None:
             return target1
+
+        can_be_frozen1 = self.can_cast_frost_bolt(target1) and not is_frozen(target1)
+        can_be_frozen2 = self.can_cast_frost_bolt(target2) and not is_frozen(target2)
+        if can_be_frozen1 and not can_be_frozen2:
+            return target1
+        if can_be_frozen2 and not can_be_frozen1:
+            return target2
 
         turns_to_kill1 = math.ceil(target1.life / self.game.magic_missile_direct_damage)
         turns_to_kill2 = math.ceil(target2.life / self.game.magic_missile_direct_damage)
@@ -311,7 +338,7 @@ class MyStrategy:
         distance = self.me.get_distance_to_unit(enemy) - self.me.radius
         if distance > self.get_attack_distance(enemy):
             return False
-        if enemy.remaining_action_cooldown_ticks > 5:
+        if enemy.remaining_action_cooldown_ticks > 10:
             return False
         # if type(enemy) is not Wizard:
         #    for ally in self.allies():
@@ -532,8 +559,8 @@ class MyStrategy:
         dx = target.x - self.me.x
         dy = target.y - self.me.y
         distance = math.hypot(dx, dy)
-        dx *= (shell_radius / distance)
-        dy *= (shell_radius / distance)
+        dx *= ((shell_radius + self.me.radius) / distance)
+        dy *= ((shell_radius + self.me.radius) / distance)
 
         angle1 = self.me.get_angle_to(target.x - dy, target.y + dx)
         angle2 = self.me.get_angle_to(target.x + dy, target.y - dx)
@@ -542,34 +569,16 @@ class MyStrategy:
         attack_sector = -self.game.staff_sector / 2.0, +self.game.staff_sector / 2.0
         return sectors_intersects(target_sector, attack_sector)
 
-    def acceptable_magic_missile_mismatch(self, target):
-        attack_radius = self.game.magic_missile_radius
-        ticks_to_achieve = math.ceil(self.me.get_distance_to_unit(target) / self.game.magic_missile_speed)
-        if ticks_to_achieve > 6:
-            attack_radius *= 1.5
-        return attack_radius
-
-    def acceptable_frost_bolt_mismatch(self, target):
-        attack_radius = self.game.frost_bolt_radius
-        ticks_to_achieve = math.ceil(self.me.get_distance_to_unit(target) / self.game.frost_bolt_speed)
-        if ticks_to_achieve > 6:
-            attack_radius *= 1.5
-        return attack_radius
-
     def is_current_attack_angle(self, target):
         angle = self.me.get_angle_to_unit(target)
-        use_magic = True
-        if self.me.level < 5:
-            staff_time = self.me.remaining_cooldown_ticks_by_action[ActionType.STAFF]
-            ranged_time = self.me.remaining_cooldown_ticks_by_action[ActionType.MAGIC_MISSILE]
-            if staff_time < ranged_time:
-                use_magic = False
+        return -self.game.staff_sector / 2.0 < angle < +self.game.staff_sector / 2.0
 
-        if use_magic:
-            attack_radius = self.acceptable_magic_missile_mismatch(target)
-            return self.is_attack_angle(target, attack_radius)
-        else:
-            return -self.game.staff_sector / 2.0 < angle < +self.game.staff_sector / 2.0
+    def can_cast_frost_bolt(self, target):
+        if not self.has_frost_bolt:
+            return False
+        if type(target) in [Tree, Building]:
+            return False
+        return self.me.remaining_cooldown_ticks_by_action[ActionType.FROST_BOLT] == 0
 
     def setup_attack(self, target):
         angle = self.me.get_angle_to_unit(target)
@@ -587,18 +596,22 @@ class MyStrategy:
         if distance < self.me.cast_range + target.radius:
             print("Remaining time for missile is %d" % self.me.remaining_cooldown_ticks_by_action[ActionType.MAGIC_MISSILE])
             if self.me.remaining_cooldown_ticks_by_action[ActionType.MAGIC_MISSILE] == 0:
-                attack_radius = self.acceptable_magic_missile_mismatch(target)
-                if self.is_attack_angle(target, attack_radius):
+                ticks_to_achieve = math.ceil(distance / self.game.magic_missile_speed)
+                future_position = predict_position(target, ticks_to_achieve)
+                future_distance = self.me.get_distance_to_unit(future_position) - target.radius
+                if self.is_attack_angle(future_position, self.game.magic_missile_radius):
                     print(self.world.tick_index, "MISSILE")
-                    self.current_move.cast_angle = angle
-                    self.current_move.min_cast_distance = distance - target.radius + self.game.magic_missile_radius
+                    self.current_move.cast_angle = self.me.get_angle_to_unit(future_position)
+                    self.current_move.min_cast_distance = future_distance + self.game.magic_missile_radius
                     self.current_move.action = ActionType.MAGIC_MISSILE
-            if self.me.level >= 10 and self.me.remaining_cooldown_ticks_by_action[ActionType.FROST_BOLT] == 0:
-                attack_radius = self.acceptable_frost_bolt_mismatch(target)
-                if self.is_attack_angle(target, attack_radius):
+            if self.can_cast_frost_bolt(target):
+                ticks_to_achieve = math.ceil(self.me.get_distance_to_unit(target) / self.game.frost_bolt_speed)
+                future_position = predict_position(target, ticks_to_achieve)
+                future_distance = self.me.get_distance_to_unit(future_position) - target.radius
+                if self.is_attack_angle(future_position, self.game.frost_bolt_radius):
                     print(self.world.tick_index, "FROST")
-                    self.current_move.cast_angle = angle
-                    self.current_move.min_cast_distance = distance - target.radius + self.game.frost_bolt_radius
+                    self.current_move.cast_angle = self.me.get_angle_to_unit(future_position)
+                    self.current_move.min_cast_distance = future_distance + self.game.frost_bolt_radius
                     self.current_move.action = ActionType.FROST_BOLT
 
     def go_to_waypoint(self, waypoint):
@@ -732,25 +745,29 @@ class MyStrategy:
                 return False
         return True
 
-    def run_for_wound_enemy(self):
-        wound_enemy = self.get_wound_enemy()
-        if wound_enemy is None:
+    def shall_retreat_from_attacker(self, attacker: LivingUnit):
+        if attacker.life < attacker.max_life * LOW_HP_FACTOR + 6:
             return False
-        print(self.world.tick_index, "Run for wound %s" % self.unit_to_str(wound_enemy))
-        if not self.is_free_way(wound_enemy):
-            return False
-        if self.me.get_distance_to_unit(wound_enemy) < self.me.cast_range * 0.9:
-            print(self.world.tick_index, "Ready to shoot")
-        angle = self.me.get_angle_to_unit(wound_enemy)
-        self.current_move.turn = angle
-        self.current_move.speed = self.game.wizard_forward_speed
-        self.current_move.strafe_speed = 0
-        return True
+        if type(attacker) is Wizard:
+            return True
+        attacker_distance = self.me.get_distance_to_unit(attacker)
+        return attacker_distance < self.game.score_gain_range * 0.9
 
     def setup_skills(self):
         if self.me.level == self.last_level:
             return
-        self.current_move.skill_to_learn = self.skills_to_learn[self.last_level]
+        next_skill = self.skills_to_learn[self.last_level]
+        self.current_move.skill_to_learn = next_skill
+        if next_skill == SkillType.ADVANCED_MAGIC_MISSILE:
+            self.advanced_missile = True
+        elif next_skill == SkillType.FROST_BOLT:
+            self.has_frost_bolt = True
+        elif next_skill == SkillType.FIREBALL:
+            self.has_fireball = True
+        elif next_skill == SkillType.HASTE:
+            self.has_haste = True
+        elif next_skill == SkillType.SHIELD:
+            self.has_shield = True
         self.last_level += 1
         print(self.world.tick_index, "LEVEL UP! Level=%d, skill=%d" % (self.me.level, self.current_move.skill_to_learn))
 
@@ -765,6 +782,9 @@ class MyStrategy:
             if obstacle is not None:
                 print(self.world.tick_index, "Continue removing the obstacle")
                 self.setup_attack(obstacle)
+                if abs(self.me.get_angle_to_unit(obstacle)) < self.game.staff_sector / 2:
+                    self.current_move.speed = self.game.wizard_forward_speed
+                    self.current_move.strafe_speed = 0
                 return
             self.last_tree = None
 
@@ -781,8 +801,6 @@ class MyStrategy:
                 return
             print(self.world.tick_index, "Medic needed, but no chance to retreat")
             move_forward = False
-        # elif self.run_for_wound_enemy():
-        #     return
         else:
             bonus = self.find_closest_bonus()
             if bonus is not None:
@@ -813,12 +831,16 @@ class MyStrategy:
                             print(self.world.tick_index, "There is no vanguard. Cannot retreat")
                     move_forward = False
 
-        if self.get_closest_attacker() is not None:
-            if self.retreat():
-                print(self.world.tick_index, "Under attack! Retreat")
+        closest_attacker = self.get_closest_attacker()
+        if closest_attacker is not None:
+            if self.shall_retreat_from_attacker(closest_attacker):
+                if self.retreat():
+                    print(self.world.tick_index, "Under attack! Retreat")
+                else:
+                    print(self.world.tick_index, "Under attack! Failed to retreat")
+                move_forward = False
             else:
-                print(self.world.tick_index, "Under attack! Failed to retreat")
-            move_forward = False
+                print(self.world.tick_index, "Should not retreat")
         else:
             print(self.world.tick_index, "There is no attacker")
 
