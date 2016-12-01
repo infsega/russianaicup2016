@@ -879,8 +879,8 @@ class MyStrategy:
         nearest_target = self.get_nearest_target()
         if nearest_target is not None:
             self.setup_attack(nearest_target)
-            if move_forward and self.current_move.action != ActionType.NONE:
-                self.current_move.speed = self.game.wizard_forward_speed
+            # if move_forward and self.current_move.action != ActionType.NONE:
+            #    self.current_move.speed = self.game.wizard_forward_speed
             return
 
         print(self.world.tick_index, "No target to attack")
