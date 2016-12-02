@@ -120,6 +120,12 @@ def predict_position(unit: Unit, ticks):
         unit.y + unit.speed_y * (0.5 * ticks))
 
 
+def can_be_frozen(target):
+    if is_frozen(target):
+        return False
+    return type(target) not in [Building, Tree]
+
+
 class MyStrategy:
 
     def __init__(self):
@@ -138,16 +144,16 @@ class MyStrategy:
         self.last_skill = -1
         self.last_level = 0
         self.skills_to_learn = [
-            SkillType.RANGE_BONUS_PASSIVE_1,
-            SkillType.RANGE_BONUS_AURA_1,
-            SkillType.RANGE_BONUS_PASSIVE_2,
-            SkillType.RANGE_BONUS_AURA_2,
-            SkillType.ADVANCED_MAGIC_MISSILE,
             SkillType.MAGICAL_DAMAGE_BONUS_PASSIVE_1,
             SkillType.MAGICAL_DAMAGE_BONUS_AURA_1,
             SkillType.MAGICAL_DAMAGE_BONUS_PASSIVE_2,
             SkillType.MAGICAL_DAMAGE_BONUS_AURA_2,
             SkillType.FROST_BOLT,
+            SkillType.RANGE_BONUS_PASSIVE_1,
+            SkillType.RANGE_BONUS_AURA_1,
+            SkillType.RANGE_BONUS_PASSIVE_2,
+            SkillType.RANGE_BONUS_AURA_2,
+            SkillType.ADVANCED_MAGIC_MISSILE,
             SkillType.STAFF_DAMAGE_BONUS_PASSIVE_1,
             SkillType.STAFF_DAMAGE_BONUS_AURA_1,
             SkillType.STAFF_DAMAGE_BONUS_PASSIVE_2,
@@ -229,12 +235,13 @@ class MyStrategy:
         if target2 is None:
             return target1
 
-        can_be_frozen1 = self.can_cast_frost_bolt(target1) and not is_frozen(target1)
-        can_be_frozen2 = self.can_cast_frost_bolt(target2) and not is_frozen(target2)
-        if can_be_frozen1 and not can_be_frozen2:
-            return target1
-        if can_be_frozen2 and not can_be_frozen1:
-            return target2
+        if self.can_cast_frost_bolt():
+            can_be_frozen1 = can_be_frozen(target1)
+            can_be_frozen2 = can_be_frozen(target2)
+            if can_be_frozen1 and not can_be_frozen2:
+                return target1
+            if can_be_frozen2 and not can_be_frozen1:
+                return target2
 
         turns_to_kill1 = math.ceil(target1.life / self.game.magic_missile_direct_damage)
         turns_to_kill2 = math.ceil(target2.life / self.game.magic_missile_direct_damage)
@@ -545,8 +552,8 @@ class MyStrategy:
     def get_next_point(self):
         dx = math.cos(self.me.angle)
         dy = math.sin(self.me.angle)
-        dx *= (self.game.staff_range * 0.5)
-        dy *= (self.game.staff_range * 0.5)
+        dx *= (self.game.wizard_cast_range * 0.9)
+        dy *= (self.game.wizard_cast_range * 0.9)
         return Point2D(self.me.x + dx, self.me.y + dy)
 
     def get_sub_waypoint(self, waypoint):
@@ -600,12 +607,8 @@ class MyStrategy:
         angle = self.me.get_angle_to_unit(target)
         return -self.game.staff_sector / 2.0 < angle < +self.game.staff_sector / 2.0
 
-    def can_cast_frost_bolt(self, target):
-        if not self.has_frost_bolt:
-            return False
-        if type(target) in [Tree, Building]:
-            return False
-        return self.me.remaining_cooldown_ticks_by_action[ActionType.FROST_BOLT] == 0
+    def can_cast_frost_bolt(self):
+        return self.has_frost_bolt and self.me.remaining_cooldown_ticks_by_action[ActionType.FROST_BOLT] == 0
 
     def setup_attack(self, target):
         angle = self.me.get_angle_to_unit(target)
@@ -630,7 +633,7 @@ class MyStrategy:
                     self.current_move.cast_angle = self.me.get_angle_to_unit(future_position)
                     self.current_move.min_cast_distance = future_distance + self.game.magic_missile_radius
                     self.current_move.action = ActionType.MAGIC_MISSILE
-            if self.can_cast_frost_bolt(target):
+            if self.can_cast_frost_bolt():
                 ticks_to_achieve = math.ceil(self.me.get_distance_to_unit(target) / self.game.frost_bolt_speed)
                 future_position = predict_position(target, ticks_to_achieve)
                 future_distance = self.me.get_distance_to_unit(future_position) - target.radius
@@ -707,16 +710,6 @@ class MyStrategy:
             return bonus2
 
     def find_closest_bonus(self):
-        bonus_ticks = self.game.bonus_appearance_interval_ticks
-        ticks = (self.world.tick_index % bonus_ticks)
-        if bonus_ticks * 7 / 8 < ticks < bonus_ticks:
-            bonus = self.pick_bonus_respawn()
-            distance_to_bonus = self.me.get_distance_to_unit(bonus)
-            if distance_to_bonus < self.me.vision_range * 0.3:
-                return None
-            if (self.world.tick_index > bonus_ticks) and (distance_to_bonus > 1200):
-                return None
-            return bonus
         closest_bonus = None
         closest_bonus_distance = None
         for bonus in self.world.bonuses:
@@ -726,6 +719,16 @@ class MyStrategy:
             if (closest_bonus_distance is None) or (closest_bonus_distance > bonus_distance):
                 closest_bonus_distance = bonus_distance
                 closest_bonus = bonus
+        if not closest_bonus:
+            bonus_ticks = self.game.bonus_appearance_interval_ticks
+            ticks = (self.world.tick_index % bonus_ticks)
+            if bonus_ticks * 7 / 8 < ticks < bonus_ticks:
+                closest_bonus = self.pick_bonus_respawn()
+                distance_to_bonus = self.me.get_distance_to_unit(closest_bonus)
+                if distance_to_bonus < self.me.vision_range * 0.3:
+                    return None
+                if (self.world.tick_index > bonus_ticks) and (distance_to_bonus > 1200):
+                    return None
         return closest_bonus
 
     def get_straying_enemy(self):
