@@ -77,7 +77,7 @@ unit_class = {
         ProjectileType.FIREBALL: "Fireball",
         ProjectileType.DART: "Dart"
     },
-    Bonus : {
+    Bonus: {
         BonusType.EMPOWER: "Empower",
         BonusType.HASTE: "Haste",
         BonusType.SHIELD: "Shield"
@@ -722,12 +722,15 @@ class MyStrategy:
         if not closest_bonus:
             bonus_ticks = self.game.bonus_appearance_interval_ticks
             ticks = (self.world.tick_index % bonus_ticks)
-            if bonus_ticks * 7 / 8 < ticks < bonus_ticks:
+            if bonus_ticks - 200 < ticks < bonus_ticks:
                 closest_bonus = self.pick_bonus_respawn()
                 distance_to_bonus = self.me.get_distance_to_unit(closest_bonus)
                 if distance_to_bonus < self.me.vision_range * 0.3:
                     return None
-                if (self.world.tick_index > bonus_ticks) and (distance_to_bonus > 1200):
+                max_distance_to_bonus_respawn = 1200
+                if self.game.skills_enabled:
+                    max_distance_to_bonus_respawn = 800
+                if (self.world.tick_index > bonus_ticks) and (distance_to_bonus > max_distance_to_bonus_respawn):
                     return None
         return closest_bonus
 
@@ -882,8 +885,8 @@ class MyStrategy:
         nearest_target = self.get_nearest_target()
         if nearest_target is not None:
             self.setup_attack(nearest_target)
-            # if move_forward and self.current_move.action != ActionType.NONE:
-            #    self.current_move.speed = self.game.wizard_forward_speed
+            if not self.game.skills_enabled and move_forward and self.current_move.action != ActionType.NONE:
+                self.current_move.speed = self.game.wizard_forward_speed
             return
 
         print(self.world.tick_index, "No target to attack")
